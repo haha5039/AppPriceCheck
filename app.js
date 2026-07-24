@@ -486,7 +486,12 @@ function loadIapData(appId) {
   selectedIapTrackName = '';
 
   if (window.location.hostname.includes('github.io') || window.location.protocol === 'file:') {
-    return loadIapDataClientSide(appId);
+    show('iap-section');
+    $('iap-select').disabled = true;
+    $('iap-select').innerHTML = '<option value="">Node.js 서버 전용 기능</option>';
+    $('iap-tbody').innerHTML = `<tr><td colspan="5" class="table-placeholder" style="color:var(--text-muted); padding: 2rem 1rem;">💡 GitHub Pages(정적 웹 페이지) 환경에서는 Apple 보안 정책(CORS)으로 인해 웹 크롤링이 제한됩니다.<br>로컬 Node.js 서버(<code>npm start</code>)를 실행하시면 108개국의 IAP/구독 가격을 실시간으로 비교하실 수 있습니다.</td></tr>`;
+    setIapStatus('💡 GitHub Pages 안내: 앱 기본 가격 조회가 지원되며, IAP 세부 비교는 Node.js 서버에서 제공됩니다.', true);
+    return;
   }
 
   const es = new EventSource(`/api/iap-stream/${appId}`);
@@ -781,22 +786,7 @@ async function searchApp(target) {
       priceData.push(data);
       receivedCount++;
 
-      // Set app meta on first result
-      if (!appInfoSet && data.appName) {
-        appInfoSet = true;
-        $('app-name').textContent = data.appName;
-        $('app-developer').textContent = `개발사 · ${data.developer || '—'}`;
-        if (data.artworkUrl) {
-          $('app-icon').src = data.artworkUrl.replace('100x100bb', '200x200bb');
-        }
-        if (data.rating) {
-          $('app-rating').textContent = `⭐ ${data.rating.toFixed(1)} (${(data.ratingCount || 0).toLocaleString()})`;
-        } else {
-          $('app-rating').textContent = '';
-        }
-        $('app-genre').textContent = data.primaryGenreName || '';
-        currentAppIsFree = data.isFree;
-      }
+      updateAppHeaderMeta();
 
       // Progress bar
       const pct = Math.min(99, (receivedCount / TOTAL_COUNTRIES) * 100);
