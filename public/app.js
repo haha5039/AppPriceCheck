@@ -132,7 +132,6 @@ async function fetchExchangeRates() {
   }
 }
 
-// ─── Client-side JSONP Helper for GitHub Pages ───────────────────────────────
 function fetchITunesJSONP(appId, country) {
   return new Promise((resolve) => {
     const cb = 'itunes_' + country + '_' + Math.random().toString(36).slice(2, 8);
@@ -141,7 +140,7 @@ function fetchITunesJSONP(appId, country) {
       delete window[cb];
       if (script.parentNode) script.parentNode.removeChild(script);
       resolve(null);
-    }, 6000);
+    }, 3000);
 
     window[cb] = (data) => {
       clearTimeout(timeout);
@@ -573,13 +572,15 @@ async function searchApp(target) {
 // ─── Client-side Search (GitHub Pages Mode) ──────────────────────────────────
 async function searchAppClientSide(targetAppId, hintCountry) {
   const appId = typeof targetAppId === 'object' ? targetAppId.appId : String(targetAppId);
+  priceData = [];
+  iapsByCountry = {};
+  currentAppIsFree = false;
+
   let appInfoSet = false;
   let receivedCount = 0;
 
-  const batchSize = 6;
-  for (let i = 0; i < APP_STORE_COUNTRIES.length; i += batchSize) {
-    const batch = APP_STORE_COUNTRIES.slice(i, i + batchSize);
-    await Promise.all(batch.map(async (country) => {
+  const tasks = APP_STORE_COUNTRIES.map((country) => async () => {
+    try {
       const app = await fetchITunesJSONP(appId, country.code);
       receivedCount++;
       const pct = Math.min(99, (receivedCount / TOTAL_COUNTRIES) * 100);
@@ -615,11 +616,16 @@ async function searchAppClientSide(targetAppId, hintCountry) {
           $('app-genre').textContent = app.primaryGenreName || '';
           currentAppIsFree = app.price === 0;
         }
+
+        if (priceData.length % 5 === 0) {
+          updateStats();
+          renderTable();
+        }
       }
-    }));
-    updateStats();
-    renderTable();
-  }
+    } catch { /* skip */ }
+  });
+
+  await limitedParallel(tasks, 15);
 
   hide('loading-section');
   if (priceData.length === 0) {
