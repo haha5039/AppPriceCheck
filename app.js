@@ -834,7 +834,6 @@ async function searchAppClientSide(targetAppId, hintCountry) {
   iapsByCountry = {};
   currentAppIsFree = false;
 
-  let appInfoSet = false;
   let receivedCount = 0;
 
   const tasks = APP_STORE_COUNTRIES.map((country) => async () => {
@@ -865,15 +864,7 @@ async function searchAppClientSide(targetAppId, hintCountry) {
         };
         priceData.push(item);
 
-        if (!appInfoSet) {
-          appInfoSet = true;
-          $('app-name').textContent = app.trackName;
-          $('app-developer').textContent = `개발사 · ${app.artistName || '—'}`;
-          if (app.artworkUrl100) $('app-icon').src = app.artworkUrl100.replace('100x100bb', '200x200bb');
-          if (app.averageUserRating) $('app-rating').textContent = `⭐ ${app.averageUserRating.toFixed(1)} (${(app.userRatingCount || 0).toLocaleString()})`;
-          $('app-genre').textContent = app.primaryGenreName || '';
-          currentAppIsFree = app.price === 0;
-        }
+        updateAppHeaderMeta();
 
         if (priceData.length % 5 === 0) {
           updateStats();
@@ -894,6 +885,7 @@ async function searchAppClientSide(targetAppId, hintCountry) {
     updateStats();
     renderTable();
     show('results-section');
+    loadIapData(appId);
   }
 }
 
