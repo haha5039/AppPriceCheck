@@ -571,11 +571,12 @@ async function searchApp(target) {
 }
 
 // ─── Client-side Search (GitHub Pages Mode) ──────────────────────────────────
-async function searchAppClientSide(appId, hintCountry) {
+async function searchAppClientSide(targetAppId, hintCountry) {
+  const appId = typeof targetAppId === 'object' ? targetAppId.appId : String(targetAppId);
   let appInfoSet = false;
   let receivedCount = 0;
 
-  const batchSize = 10;
+  const batchSize = 6;
   for (let i = 0; i < APP_STORE_COUNTRIES.length; i += batchSize) {
     const batch = APP_STORE_COUNTRIES.slice(i, i + batchSize);
     await Promise.all(batch.map(async (country) => {
