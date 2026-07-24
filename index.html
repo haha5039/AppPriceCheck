@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AppPriceCheck — 앱스토어 국가별 가격 비교</title>
+  <meta name="description" content="100개 이상 국가의 App Store 및 인앱결제 가격을 한눈에 비교하세요.">
+  <meta name="theme-color" content="#080b1d">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+
+    <!-- ── Header ── -->
+    <header class="site-header">
+      <div class="container">
+        <div class="logo">
+          <span class="logo-icon">📱</span>
+          <span class="logo-text">AppPrice<span class="accent">Check</span></span>
+        </div>
+        <nav class="nav-links">
+          <a href="#search-input" class="nav-active">가격 비교</a>
+        </nav>
+      </div>
+    </header>
+
+    <!-- ── Hero / Search ── -->
+    <section class="hero">
+      <div class="hero-bg-glow"></div>
+      <div class="container">
+        <div class="hero-content">
+          <p class="hero-eyebrow"><span class="live-dot"></span> APP STORE PRICE INTELLIGENCE</p>
+          <h1 class="hero-title">
+            앱과 <span class="gradient-text">인앱결제 가격</span>을<br>국가별로 비교하세요
+          </h1>
+          <p class="hero-subtitle">
+            100개 이상 국가의 현지 가격과 USD 환산가를 실시간으로 확인할 수 있습니다.
+          </p>
+
+          <div class="search-box">
+            <div class="search-input-wrapper" id="search-wrapper">
+              <span class="search-icon">🔍</span>
+              <input
+                type="text"
+                id="search-input"
+                class="search-input"
+                placeholder="App Store URL 또는 앱 ID를 붙여넣으세요"
+                autocomplete="off"
+                spellcheck="false"
+              >
+              <button id="search-btn" class="search-btn">
+                <span class="btn-label">조회하기</span>
+                <span class="btn-arrow">→</span>
+              </button>
+            </div>
+            <div class="search-examples">
+              <span class="examples-label">예시:</span>
+              <button class="example-btn" data-url="https://apps.apple.com/us/app/chatgpt/id6448311069">ChatGPT</button>
+              <button class="example-btn" data-url="https://apps.apple.com/us/app/minecraft/id479516143">Minecraft</button>
+              <button class="example-btn" data-url="https://apps.apple.com/us/app/spotify-music-and-podcasts/id324684580">Spotify</button>
+              <button class="example-btn" data-url="https://apps.apple.com/us/app/youtube-watch-listen-stream/id544007664">YouTube</button>
+              <button class="example-btn" data-url="https://apps.apple.com/us/app/procreate-pocket/id916366645">Procreate</button>
+            </div>
+          </div>
+
+          <div class="hero-proof" aria-label="서비스 특징">
+            <div class="proof-item"><strong>100+</strong><span>지원 국가</span></div>
+            <div class="proof-item"><strong>실시간</strong><span>App Store 조회</span></div>
+            <div class="proof-item"><strong>IAP</strong><span>구독 · 아이템 비교</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Loading ── -->
+    <div id="loading-section" class="loading-section hidden">
+      <div class="container">
+        <div class="loading-card">
+          <div class="loading-spinner"></div>
+          <div class="loading-text">
+            <p id="loading-status" class="loading-status-text">App Store 가격을 불러오는 중…</p>
+            <div class="progress-bar-track">
+              <div class="progress-bar-fill" id="progress-fill"></div>
+            </div>
+            <p class="progress-label">
+              <span id="loaded-count">0</span>
+              <span class="progress-separator">/</span>
+              <span id="total-count">108</span>
+              개 국가 조회됨
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Error ── -->
+    <div id="error-section" class="error-section hidden">
+      <div class="container">
+        <div class="error-card">
+          <span class="error-icon">⚠️</span>
+          <h3 id="error-title">앱을 찾을 수 없습니다</h3>
+          <p id="error-msg">App Store URL 또는 앱 ID를 확인한 뒤 다시 시도해 주세요.</p>
+          <button class="retry-btn" id="retry-btn">다시 입력하기</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Results ── -->
+    <div id="results-section" class="results-section hidden">
+      <div class="container">
+
+        <!-- App Info Card -->
+        <div class="app-info-card">
+          <div class="app-info-main">
+            <div class="app-icon-wrapper">
+              <img id="app-icon" class="app-icon" src="" alt="App icon" onerror="this.src='data:image/svg+xml,<svg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 100 100\'><rect width=\'100\' height=\'100\' rx=\'20\' fill=\'%231a1a38\'/><text y=\'55\' x=\'50\' font-size=\'40\' text-anchor=\'middle\'>📱</text></svg>'">
+            </div>
+            <div class="app-details">
+              <h2 id="app-name" class="app-name">—</h2>
+              <p id="app-developer" class="app-developer">—</p>
+              <div class="app-meta">
+                <span id="app-rating" class="app-rating-badge"></span>
+                <span id="app-genre" class="app-genre"></span>
+              </div>
+            </div>
+            <div class="app-us-price-block">
+              <p class="us-price-label">미국 App Store</p>
+              <p id="us-price" class="us-price-value">—</p>
+              <a id="app-store-link" href="#" target="_blank" rel="noopener" class="view-on-store">App Store에서 보기 ↗</a>
+            </div>
+          </div>
+        </div>
+
+        <!-- Stats Cards -->
+        <div class="stats-grid" id="stats-grid">
+          <div class="stat-card">
+            <div class="stat-icon">💚</div>
+            <div class="stat-body">
+              <p class="stat-label">가장 저렴한 국가</p>
+              <p id="cheapest-price" class="stat-value green">—</p>
+              <p id="cheapest-country" class="stat-sub">—</p>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon">🔴</div>
+            <div class="stat-body">
+              <p class="stat-label">가장 높은 가격</p>
+              <p id="expensive-price" class="stat-value red">—</p>
+              <p id="expensive-country" class="stat-sub">—</p>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon">📊</div>
+            <div class="stat-body">
+              <p class="stat-label">글로벌 평균</p>
+              <p id="avg-price" class="stat-value">—</p>
+              <p class="stat-sub">USD 환산 기준</p>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon">🌍</div>
+            <div class="stat-body">
+              <p class="stat-label">이용 가능 국가</p>
+              <p id="countries-count" class="stat-value accent">—</p>
+              <p class="stat-sub">개 국가</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Price Table -->
+        <div class="table-section">
+          <div class="table-controls">
+            <div class="region-tabs" id="region-tabs">
+              <button class="region-tab active" data-region="all">전체</button>
+              <button class="region-tab" data-region="Americas">미주</button>
+              <button class="region-tab" data-region="Europe">유럽</button>
+              <button class="region-tab" data-region="Asia Pacific">아시아 · 태평양</button>
+              <button class="region-tab" data-region="Middle East">중동</button>
+              <button class="region-tab" data-region="Africa">아프리카</button>
+            </div>
+            <div class="table-actions">
+              <div class="country-search-wrapper">
+                <span>🔍</span>
+                <input type="text" id="country-search" class="country-search" placeholder="국가 검색">
+              </div>
+              <div class="sort-wrapper">
+                <label class="sort-label">정렬</label>
+                <select id="sort-select" class="sort-select">
+                  <option value="usd-asc">USD 가격 낮은 순</option>
+                  <option value="usd-desc">USD 가격 높은 순</option>
+                  <option value="name-asc">국가명 A→Z</option>
+                  <option value="diff-asc">미국 대비 저렴한 순</option>
+                  <option value="diff-desc">미국 대비 비싼 순</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="table-wrapper">
+            <table class="price-table" id="price-table">
+              <thead>
+                <tr>
+                  <th class="col-rank">#</th>
+                  <th class="col-country">국가</th>
+                  <th class="col-local">현지 가격</th>
+                  <th class="col-usd">USD</th>
+                  <th class="col-diff">미국 대비</th>
+                  <th class="col-bar">상대 가격</th>
+                </tr>
+              </thead>
+              <tbody id="price-tbody">
+                <tr><td colspan="6" class="table-placeholder">가격을 불러오는 중…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- IAP Section -->
+        <div id="iap-section" class="iap-section hidden">
+          <div class="iap-header">
+            <div class="iap-header-left">
+              <p class="section-kicker">IN-APP PURCHASES</p>
+              <h3 class="iap-title">인앱결제 가격 비교</h3>
+              <p class="iap-subtitle">구독과 아이템의 국가별 현지 가격 및 USD 환산가를 비교합니다.</p>
+            </div>
+          </div>
+
+          <div class="iap-controls">
+            <label class="iap-label">비교할 항목</label>
+            <select id="iap-select" class="iap-select" disabled>
+              <option value="">IAP 목록을 불러오는 중…</option>
+            </select>
+            <div id="iap-loading" class="iap-loading" aria-live="polite">
+              <div class="mini-spinner"></div>
+              <span id="iap-loading-text">IAP 가격을 국가별로 확인하는 중…</span>
+            </div>
+          </div>
+
+          <div class="table-wrapper" id="iap-table-wrapper">
+            <table class="price-table" id="iap-table">
+              <thead>
+                <tr>
+                  <th class="col-rank">#</th>
+                  <th class="col-country">국가</th>
+                  <th class="col-local">현지 가격</th>
+                  <th class="col-usd">USD</th>
+                  <th class="col-diff">미국 대비</th>
+                </tr>
+              </thead>
+              <tbody id="iap-tbody">
+                <tr><td colspan="5" class="table-placeholder">비교할 IAP 항목을 선택해 주세요.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Data note -->
+        <div class="data-note">
+          <span>국가별 제공 여부는 해당 App Store 스토어프런트의 실시간 응답을 기준으로 합니다. 앱 내부 기능의 지역 지원은 별도일 수 있으며, 부가세(VAT/GST) 포함 여부도 국가별로 다를 수 있습니다.</span>
+          환율: <a href="https://www.exchangerate-api.com/" target="_blank" rel="noopener">ExchangeRate-API</a> · 데이터 캐시: 15분
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ── Footer ── -->
+    <footer class="site-footer">
+      <div class="container">
+        <p>AppPriceCheck · Apple Inc.와 관련 없는 독립 정보 서비스입니다.</p>
+      </div>
+    </footer>
+
+  </div><!-- #app -->
+  <script src="app.js"></script>
+</body>
+</html>
