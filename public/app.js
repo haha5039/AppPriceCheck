@@ -298,8 +298,33 @@ function fetchITunesJSONP(appId, country) {
   });
 }
 
+function updateAppHeaderMeta() {
+  const usItem = priceData.find(i => i.country === 'us' && i.appName);
+  const krItem = priceData.find(i => i.country === 'kr' && i.appName);
+  const gbItem = priceData.find(i => i.country === 'gb' && i.appName);
+  const caItem = priceData.find(i => i.country === 'ca' && i.appName);
+  const anyItem = priceData.find(i => i.appName);
+
+  const bestItem = usItem || krItem || gbItem || caItem || anyItem;
+  if (!bestItem) return;
+
+  $('app-name').textContent = bestItem.appName;
+  $('app-developer').textContent = `개발사 · ${bestItem.developer || '—'}`;
+  if (bestItem.artworkUrl) {
+    $('app-icon').src = bestItem.artworkUrl.replace('100x100bb', '200x200bb');
+  }
+  if (bestItem.rating) {
+    $('app-rating').textContent = `⭐ ${bestItem.rating.toFixed(1)} (${(bestItem.ratingCount || 0).toLocaleString()})`;
+  } else {
+    $('app-rating').textContent = '';
+  }
+  $('app-genre').textContent = bestItem.primaryGenreName || '';
+}
+
 // ─── Stats Update ─────────────────────────────────────────────────────────────
 function updateStats() {
+  updateAppHeaderMeta();
+
   const availableItems = priceData.filter((item) => item.available !== false);
   const usItem = availableItems.find(i => i.country === 'us');
   if (usItem) {
@@ -460,6 +485,10 @@ function loadIapData(appId) {
   iapCompletedCountries = 0;
   selectedIapTrackName = '';
 
+  if (window.location.hostname.includes('github.io') || window.location.protocol === 'file:') {
+    return loadIapDataClientSide(appId);
+  }
+
   const es = new EventSource(`/api/iap-stream/${appId}`);
   let receivedIapCountries = 0;
 
@@ -506,12 +535,108 @@ function loadIapData(appId) {
     es.close();
     const availableCountries = Object.keys(iapsByCountry).length;
     if (availableCountries === 0) {
-      hide('iap-section');
+      loadIapDataClientSide(appId);
       return;
     }
     setIapStatus(`일부 국가의 IAP 가격을 불러왔습니다 · ${availableCountries}개 국가`, true);
     renderIapTable();
   };
+}
+
+// ─── Client-side IAP Loader (GitHub Pages Mode) ──────────────────────────────
+async function loadIapDataClientSide(appId) {
+  const iapCountries = ['us', 'kr', 'jp', 'gb', 'de', 'fr', 'ca', 'au', 'hu', 'pk', 'es', 'it', 'pl', 'cz', 'cn', 'tw', 'br', 'in'];
+  let completed = 0;
+
+  const tasks = iapCountries.map((c) => async () => {
+    try {
+      const currency = COUNTRY_CURRENCIES[c] || 'USD';
+      const targetUrl = `https://apps.apple.com/${c}/app/id${appId}`;
+      const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;
+      
+      const res = await fetch(proxyUrl);
+      if (res.ok) {
+        const html = await res.text();
+        const pairs = extractIapPairsClient(html);
+        if (pairs.length > 0) {
+          const seenNames = new Map();
+          const iaps = pairs.map(([name, priceStr]) => ({
+            trackKey: makeIapKeyClient(name, seenNames),
+            trackName: name,
+            price: parseLocalizedPriceClient(priceStr, currency),
+            currency: currency,
+            formattedPrice: priceStr
+          })).filter(i => i.price !== null);
+
+          if (iaps.length > 0) {
+            iapsByCountry[c] = iaps;
+            const refIaps = iapsByCountry['us'] || iapsByCountry[c];
+            if (refIaps) populateIapSelect(refIaps);
+            renderIapTable();
+          }
+        }
+      }
+    } catch { /* skip failed fetch */ } finally {
+      completed++;
+      setIapStatus(`IAP 가격 확인 중 · ${completed}/${iapCountries.length}개 주요 국가`);
+    }
+  });
+
+  await limitedParallel(tasks, 4);
+
+  const totalLoaded = Object.keys(iapsByCountry).length;
+  if (totalLoaded > 0) {
+    setIapStatus(`IAP 가격 조회 완료 · ${totalLoaded}개 주요 국가`, true);
+    renderIapTable();
+  } else {
+    hide('iap-section');
+  }
+}
+
+function makeIapKeyClient(name, seenNames) {
+  const base = name.toLowerCase().replace(/\s+/g, ' ').trim();
+  const occ = (seenNames.get(base) || 0) + 1;
+  seenNames.set(base, occ);
+  return `${base}__${occ}`;
+}
+
+function extractIapPairsClient(html) {
+  const pairs = [];
+  const pairRe = /<div\b[^>]*\btext-pair\b[^>]*>\s*<span\b[^>]*>([\s\S]*?)<\/span>\s*<span\b[^>]*>([\s\S]*?)<\/span>/gi;
+  let match;
+  while ((match = pairRe.exec(html)) !== null) {
+    const name = match[1].replace(/<[^>]+>/g, '').trim();
+    const price = match[2].replace(/<[^>]+>/g, '').trim();
+    if (name && price && /\d/.test(price)) {
+      pairs.push([name, price]);
+    }
+  }
+  return pairs;
+}
+
+function parseLocalizedPriceClient(formattedPrice, currency) {
+  if (!formattedPrice) return null;
+  const str = String(formattedPrice).trim();
+  const m = str.match(/[\d][\d\s.,'’]*/);
+  if (!m) return null;
+  let numeric = m[0].replace(/[\s'’]/g, '');
+
+  if (/\.\d{2}$/.test(numeric)) {
+    const lastDot = numeric.lastIndexOf('.');
+    const whole = numeric.slice(0, lastDot).replace(/[.,]/g, '');
+    const dec = numeric.slice(lastDot + 1);
+    const parsed = Number(`${whole}.${dec}`);
+    if (Number.isFinite(parsed)) return parsed;
+  } else if (/,\d{2}$/.test(numeric)) {
+    const lastComma = numeric.lastIndexOf(',');
+    const whole = numeric.slice(0, lastComma).replace(/[.,]/g, '');
+    const dec = numeric.slice(lastComma + 1);
+    const parsed = Number(`${whole}.${dec}`);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+
+  const parsed = Number(numeric.replace(/[.,]/g, ''));
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 // ─── IAP Table Rendering ──────────────────────────────────────────────────────
