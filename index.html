@@ -36,7 +36,7 @@
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=2.0.0">
+  <link rel="stylesheet" href="style.css?v=2.1.0">
 </head>
 <body>
   <div id="app">
@@ -59,10 +59,10 @@
             <span>⭐ 보관함</span>
             <span id="fav-count-badge" class="fav-count-badge hidden">0</span>
           </button>
-          <button class="nav-btn" id="keyboard-hint-btn" title="Cmd/Ctrl + K로 검색 포커스">
+          <button class="nav-btn" id="keyboard-hint-btn" aria-label="앱 이름 검색" title="Cmd/Ctrl + K로 검색 포커스">
             <span class="kbd-badge">⌘K</span>
           </button>
-          <button class="nav-btn theme-toggle-btn" id="theme-toggle" title="테마 전환">
+          <button class="nav-btn theme-toggle-btn" id="theme-toggle" aria-label="테마 전환" title="테마 전환">
             <span class="theme-icon" id="theme-icon">🌙</span>
           </button>
         </nav>
@@ -82,52 +82,40 @@
             100개 이상 국가의 현지 가격과 USD 환산가를 실시간으로 확인할 수 있습니다.
           </p>
 
-          <!-- Store Selector Tabs -->
-          <div class="store-selector-tabs" id="store-tabs">
-            <button class="store-tab-btn active" id="tab-apple">
-              <span class="store-tab-icon">📱</span> App Store
-            </button>
-            <button class="store-tab-btn" id="tab-google">
-              <span class="store-tab-icon">🤖</span> Google Play
-            </button>
-          </div>
-
           <div class="search-box">
             <div class="search-input-wrapper" id="search-wrapper">
               <input
                 type="text"
                 id="search-input"
                 class="search-input" aria-label="앱 URL 또는 ID 입력"
-                placeholder="App Store URL 또는 앱 ID를 붙여넣으세요"
+                placeholder="App Store / Google Play URL 또는 ID 붙여넣기 (자동 감지)"
                 autocomplete="off"
                 spellcheck="false"
               >
+              <span id="store-badge" class="store-badge hidden"></span>
               <button id="search-btn" class="search-btn">
                 <span class="btn-label">조회하기</span>
                 <span class="btn-arrow">→</span>
               </button>
             </div>
-            <!-- Apple Examples -->
-            <div class="search-examples" id="apple-examples">
+            <!-- Search Examples -->
+            <div class="search-examples">
               <span class="examples-label">빠른 조회 예시:</span>
-              <button class="example-btn" data-url="https://apps.apple.com/us/app/chatgpt/id6448311069">ChatGPT</button>
-              <button class="example-btn" data-url="https://apps.apple.com/us/app/minecraft/id479516143">Minecraft</button>
-              <button class="example-btn" data-url="https://apps.apple.com/us/app/youtube/id544007664">YouTube</button>
-              <button class="example-btn" data-url="https://apps.apple.com/us/app/spotify-music-and-podcasts/id324684580">Spotify</button>
-            </div>
-            <!-- Google Play Examples -->
-            <div class="search-examples hidden" id="google-examples">
-              <span class="examples-label">빠른 조회 예시:</span>
-              <button class="example-btn" data-url="https://play.google.com/store/apps/details?id=com.openai.chatgpt">ChatGPT</button>
-              <button class="example-btn" data-url="https://play.google.com/store/apps/details?id=com.mojang.minecraftpe">Minecraft</button>
-              <button class="example-btn" data-url="https://play.google.com/store/apps/details?id=com.google.android.youtube">YouTube</button>
-              <button class="example-btn" data-url="https://play.google.com/store/apps/details?id=com.spotify.music">Spotify</button>
+              <button class="example-btn" data-url="https://apps.apple.com/us/app/chatgpt/id6448311069">App Store · ChatGPT</button>
+              <button class="example-btn" data-url="https://apps.apple.com/us/app/minecraft/id479516143">App Store · Minecraft</button>
+              <button class="example-btn" data-url="https://apps.apple.com/us/app/youtube/id544007664">App Store · YouTube</button>
+              <button class="example-btn" data-url="https://apps.apple.com/us/app/spotify-music-and-podcasts/id324684580">App Store · Spotify</button>
+              <span class="examples-sep">·</span>
+              <button class="example-btn" data-url="https://play.google.com/store/apps/details?id=com.openai.chatgpt">Google Play · ChatGPT</button>
+              <button class="example-btn" data-url="https://play.google.com/store/apps/details?id=com.mojang.minecraftpe">Google Play · Minecraft</button>
+              <button class="example-btn" data-url="https://play.google.com/store/apps/details?id=com.google.android.youtube">Google Play · YouTube</button>
+              <button class="example-btn" data-url="https://play.google.com/store/apps/details?id=com.spotify.music">Google Play · Spotify</button>
             </div>
             <!-- Recent Searches -->
             <div class="recent-searches hidden" id="recent-searches">
               <span class="examples-label">최근 검색:</span>
               <div id="recent-list" class="recent-list"></div>
-              <button class="recent-clear-btn" id="recent-clear-btn" title="최근 검색 기록 삭제">✕</button>
+              <button class="recent-clear-btn" id="recent-clear-btn" aria-label="최근 검색 기록 지우기" title="최근 검색 기록 삭제">✕</button>
             </div>
           </div>
 
@@ -177,6 +165,12 @@
     <div id="results-section" class="results-section hidden">
       <div class="container">
 
+        <div class="scan-summary" aria-label="조회 진행 상황">
+          <p id="scan-status" role="status" aria-live="polite"></p>
+          <progress id="scan-progress" max="100" value="0" aria-label="국가별 조회 진행률"></progress>
+          <p id="scan-notice" class="scan-notice"></p>
+          <button id="retry-failed-btn" class="nav-btn" disabled>실패 국가 다시 조회</button>
+        </div>
         <!-- App Info Card -->
         <div class="app-info-card">
           <div class="app-info-main">
@@ -202,6 +196,9 @@
           <div class="app-actions">
             <button class="action-btn" id="fav-btn" title="보관함에 저장/삭제">
               <span id="fav-btn-icon">⭐</span> <span id="fav-btn-text">즐겨찾기</span>
+            </button>
+            <button class="action-btn" id="refresh-btn" title="캐시를 건너뛰고 스토어와 환율을 다시 조회">
+              <span>↻</span> 새로고침
             </button>
             <button class="action-btn" id="share-btn" title="결과 공유">
               <span>🔗</span> 공유
@@ -331,7 +328,7 @@
 
           <div class="compare-search-bar">
             <span class="compare-search-icon">🔍</span>
-            <input type="text" id="compare-search-input" class="compare-search-input" placeholder="비교할 앱의 App Store ID 또는 URL을 입력하세요" autocomplete="off">
+            <input type="text" id="compare-search-input" aria-label="비교 앱 URL 또는 ID" class="compare-search-input" placeholder="비교할 앱의 App Store ID 또는 URL을 입력하세요" autocomplete="off">
             <button id="compare-search-btn" class="search-btn compare-go-btn">
               <span class="btn-label">비교하기</span>
             </button>
@@ -382,7 +379,7 @@
             <div class="table-actions">
               <div class="country-search-wrapper">
                 <span>🔍</span>
-                <input type="text" id="country-search" class="country-search" placeholder="국가 검색">
+                <input type="text" id="country-search" aria-label="국가 검색" class="country-search" placeholder="국가 검색">
               </div>
               <div class="currency-wrapper">
                 <label class="sort-label">통화</label>
@@ -433,16 +430,18 @@
           <div class="iap-header">
             <div class="iap-header-left">
               <p class="section-kicker">IN-APP PURCHASES</p>
-              <h3 class="iap-title">인앱결제 가격 비교</h3>
-              <p class="iap-subtitle">구독과 아이템의 국가별 현지 가격 및 USD 환산가를 비교합니다.</p>
+              <h3 id="iap-title" class="iap-title">인앱결제 가격 비교</h3>
+              <p id="iap-subtitle" class="iap-subtitle">동일하게 표기된 구독과 아이템의 국가별 현지 가격 및 USD 환산가를 비교합니다.</p>
+              <p id="iap-source-note" class="iap-source-note">Apple 공개 페이지에는 안정적인 IAP 상품 ID가 없어, 국가별로 동일하게 표기된 항목만 비교합니다. 번역되거나 지역 전용인 항목은 제외될 수 있습니다.</p>
             </div>
           </div>
 
           <div class="iap-controls">
             <label class="iap-label">비교할 항목</label>
-            <select id="iap-select" class="iap-select" disabled>
+            <select id="iap-select" aria-label="비교할 인앱결제 항목" class="iap-select" disabled>
               <option value="">IAP 목록을 불러오는 중…</option>
             </select>
+            <button id="retry-iap-btn" class="nav-btn" disabled>IAP 실패 국가 다시 조회</button>
             <div id="iap-loading" class="iap-loading" aria-live="polite">
               <div class="mini-spinner"></div>
               <span id="iap-loading-text">IAP 가격을 국가별로 확인하는 중…</span>
@@ -463,7 +462,7 @@
             <div class="table-actions">
               <div class="country-search-wrapper">
                 <span class="search-icon">🔍</span>
-                <input type="text" id="iap-country-search" class="country-search" placeholder="국가 검색..." autocomplete="off">
+                <input type="text" id="iap-country-search" aria-label="인앱결제 국가 검색" class="country-search" placeholder="국가 검색..." autocomplete="off">
               </div>
               <div class="currency-wrapper">
                 <span class="currency-label">통화</span>
@@ -486,6 +485,9 @@
                 </select>
               </div>
               <button class="action-btn" id="iap-copy-table-btn" title="IAP 테이블 복사">📋 복사</button>
+              <button class="action-btn" id="iap-csv-btn" title="IAP 테이블 CSV 내보내기">
+                <span>📥</span> CSV 내보내기
+              </button>
             </div>
           </div>
 
@@ -519,7 +521,7 @@
     <!-- ── Toast Container ── -->
 
     <!-- Back to Top -->
-    <button id="back-to-top" class="back-to-top hidden" title="맨 위로 이동">↑</button>
+    <button id="back-to-top" aria-label="맨 위로 이동" class="back-to-top hidden" title="맨 위로 이동">↑</button>
 
     <!-- ── Search Modal ── -->
     <div id="search-modal" class="search-modal hidden" role="dialog" aria-modal="true" aria-label="앱 검색">
@@ -528,9 +530,9 @@
         <div class="search-modal-header">
           <span class="search-modal-icon">🔍</span>
           <input type="text" id="search-modal-input" class="search-modal-input" aria-label="앱 이름 검색" role="searchbox" placeholder="앱 이름으로 검색하세요 (예: ChatGPT, Spotify)" autocomplete="off" spellcheck="false">
-          <button class="search-modal-close" id="search-modal-close">✕</button>
+          <button class="search-modal-close" id="search-modal-close" aria-label="닫기">✕</button>
         </div>
-        <div class="search-modal-results" id="search-modal-results">
+        <div class="search-modal-results" id="search-modal-results" aria-live="polite">
           <p class="search-modal-hint">앱 이름을 입력하면 App Store에서 검색합니다.</p>
         </div>
       </div>
@@ -543,7 +545,7 @@
         <div class="search-modal-header">
           <span class="search-modal-icon">⭐</span>
           <h3 class="watchlist-modal-title">즐겨찾기 보관함</h3>
-          <button class="search-modal-close" id="watchlist-modal-close">✕</button>
+          <button class="search-modal-close" id="watchlist-modal-close" aria-label="닫기">✕</button>
         </div>
         <div class="watchlist-modal-body" id="watchlist-modal-body">
           <div id="watchlist-empty" class="watchlist-empty">
@@ -562,17 +564,17 @@
         <div class="search-modal-header">
           <span class="search-modal-icon">🧮</span>
           <h3 class="watchlist-modal-title">환율 & PPP 계산기</h3>
-          <button class="search-modal-close" id="calc-modal-close">✕</button>
+          <button class="search-modal-close" id="calc-modal-close" aria-label="닫기">✕</button>
         </div>
         <div class="calc-modal-body" style="padding: 24px;">
           <div class="calc-field-group" style="margin-bottom: 16px;">
             <label class="calc-label" style="display:block; font-size: 0.85rem; color: var(--text-dim); margin-bottom: 6px;">변환할 현지 금액</label>
-            <input type="number" id="calc-amount-input" class="search-modal-input" value="100" placeholder="금액 입력" style="width:100%; border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; background: rgba(0,0,0,0.2); color: var(--text); font-size: 1.1rem; font-weight: 600;">
+            <input type="number" id="calc-amount-input" aria-label="변환할 현지 금액" class="search-modal-input" value="100" placeholder="금액 입력" style="width:100%; border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; background: rgba(0,0,0,0.2); color: var(--text); font-size: 1.1rem; font-weight: 600;">
           </div>
           <div class="calc-row" style="display: flex; gap: 12px; margin-bottom: 20px;">
             <div class="calc-field-group" style="flex:1;">
               <label class="calc-label" style="display:block; font-size: 0.85rem; color: var(--text-dim); margin-bottom: 6px;">원본 통화 (From)</label>
-              <select id="calc-from-select" class="calc-select" style="width:100%; border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: var(--surface); color: var(--text); font-size: 0.9rem;">
+              <select id="calc-from-select" aria-label="원본 통화" class="calc-select" style="width:100%; border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: var(--surface); color: var(--text); font-size: 0.9rem;">
                 <option value="USD">USD ($ - 미국 달러)</option>
                 <option value="KRW">KRW (₩ - 대한민국 원)</option>
                 <option value="INR">INR (₹ - 인도 루피)</option>
@@ -587,7 +589,7 @@
             </div>
             <div class="calc-field-group" style="flex:1;">
               <label class="calc-label" style="display:block; font-size: 0.85rem; color: var(--text-dim); margin-bottom: 6px;">목표 기준 통화 (To)</label>
-              <select id="calc-to-select" class="calc-select" style="width:100%; border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: var(--surface); color: var(--text); font-size: 0.9rem;">
+              <select id="calc-to-select" aria-label="목표 기준 통화" class="calc-select" style="width:100%; border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: var(--surface); color: var(--text); font-size: 0.9rem;">
                 <option value="KRW">KRW (₩ - 원화)</option>
                 <option value="USD">USD ($ - 달러)</option>
                 <option value="EUR">EUR (€ - 유로)</option>
@@ -614,7 +616,7 @@
         <div class="search-modal-header">
           <span class="search-modal-icon">⌨️</span>
           <h3 class="watchlist-modal-title">키보드 단축키</h3>
-          <button class="search-modal-close" id="shortcuts-modal-close">✕</button>
+          <button class="search-modal-close" id="shortcuts-modal-close" aria-label="닫기">✕</button>
         </div>
         <div class="shortcuts-body">
           <div class="shortcut-group">
@@ -638,6 +640,25 @@
       </div>
     </div>
 
+    <!-- ── Price History ── -->
+    <div id="history-section" class="history-section hidden">
+      <div class="container">
+        <div class="history-header">
+          <div>
+            <p class="section-kicker">PRICE HISTORY</p>
+            <h3 class="history-title">최근 조회 이력</h3>
+            <p class="history-subtitle">이 브라우저에서 조회한 앱의 최저가 요약입니다. 행을 클릭하면 다시 조회합니다.</p>
+          </div>
+          <button class="action-btn" id="history-clear-btn" title="저장된 조회 이력 모두 삭제">🧹 이력 지우기</button>
+        </div>
+        <div id="history-list" class="history-list"></div>
+        <div id="history-empty" class="history-empty">
+          <p>아직 조회 이력이 없습니다.</p>
+          <p class="sub">앱을 조회하면 최저가와 평균가가 여기에 기록됩니다.</p>
+        </div>
+      </div>
+    </div>
+
 <div id="toast-container" class="toast-container"></div>
 
     <!-- ── Footer ── -->
@@ -648,7 +669,7 @@
     </footer>
 
   </div><!-- #app -->
-  <script src="app.js?v=2.0.0"></script>
+  <script src="app.js?v=2.1.1"></script>
 
   <script>
     if ('serviceWorker' in navigator) {

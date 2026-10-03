@@ -2,7 +2,7 @@
   "name": "AppPriceCheck — 앱스토어 국가별 가격 비교",
   "short_name": "AppPriceCheck",
   "description": "100개 이상 국가의 App Store 및 인앱결제 가격을 한눈에 비교하세요.",
-  "start_url": "/",
+  "start_url": "./",
   "display": "standalone",
   "background_color": "#070a19",
   "theme_color": "#8b5cf6",
@@ -15,7 +15,11 @@
       "purpose": "any"
     }
   ],
-  "categories": ["utilities", "productivity"],
+  "categories": [
+    "utilities",
+    "productivity"
+  ],
   "lang": "ko",
-  "dir": "ltr"
+  "dir": "ltr",
+  "scope": "./"
 }
