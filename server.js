@@ -8,6 +8,7 @@ const requestContext = new AsyncLocalStorage();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const PAGES_ORIGIN = process.env.PAGES_ORIGIN || 'https://haha5039.github.io';
 
 // Keep-alive sockets cut down on connection churn; Google Play resets idle
 // connections aggressively, which was one source of run-to-run failures.
@@ -16,7 +17,7 @@ const axiosInstance = axios.create({
   httpsAgent: new https.Agent({ keepAlive: true, maxSockets: 24 }),
 });
 
-app.use(express.static(__dirname));
+app.use(express.static(path.join(__dirname, 'public')));
 
 // ─── Cache ────────────────────────────────────────────────────────────────────
 const cache = new Map();
@@ -84,7 +85,11 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000).unref();
 
-app.use('/api', rateLimit);
+app.use('/api', (req, res, next) => {
+  res.vary('Origin');
+  if (req.get('Origin') === PAGES_ORIGIN) res.set('Access-Control-Allow-Origin', PAGES_ORIGIN);
+  next();
+}, rateLimit);
 
 // ─── Country List ─────────────────────────────────────────────────────────────
 const APP_STORE_COUNTRIES = [
@@ -284,8 +289,13 @@ async function iTunesLookup(appId, country, forceRefresh = false) {
     decompress: true,
     headers: { 'User-Agent': 'Mozilla/5.0 AppPriceCheck/1.0', 'Accept-Encoding': 'gzip, deflate' },
   });
-  setCache(cacheKey, res.data);
-  return res.data;
+  const data = res.data;
+  if (!Array.isArray(data?.results) || data.resultCount !== data.results.length ||
+      (data.resultCount > 0 && (!Number.isFinite(data.results[0]?.price) || data.results[0].price < 0 || !data.results[0].currency))) {
+    throw new Error('Invalid iTunes lookup response');
+  }
+  setCache(cacheKey, data);
+  return data;
 }
 
 function decodeHtml(value) {
@@ -452,9 +462,21 @@ function buildGooglePlayIaps(iapRange, minMax, currency) {
   ];
 }
 
+function unavailablePriceRow(country, fetchStatus) {
+  return {
+    country: country.code,
+    countryName: country.name,
+    flag: country.flag,
+    region: country.region,
+    available: false,
+    price: null,
+    currency: '',
+    formattedPrice: '',
+    fetchStatus,
+  };
+}
+
 function isAvailableInStorefront(app, countryCode) {
-  if (!app) return false;
-  if (app.price === undefined || app.price === null) return false;
   if (app.trackViewUrl) {
     try {
       const match = new URL(app.trackViewUrl).pathname.match(/^\/([a-z]{2})\//i);
@@ -748,7 +770,6 @@ app.get('/api/prices-stream/:appId', asyncRoute(async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('X-Accel-Buffering', 'no');
   res.setHeader('Connection', 'keep-alive');
-  res.setHeader('Access-Control-Allow-Origin', '*');
   res.flushHeaders();
 
   const send = (obj) => { if (!req.signal.aborted && !res.writableEnded && !res.destroyed) res.write(`data: ${JSON.stringify(obj)}\n\n`); };
@@ -762,51 +783,21 @@ app.get('/api/prices-stream/:appId', asyncRoute(async (req, res) => {
     return res.end();
   }
 
-  // Verify the app exists across hintCountry, US, or major regional storefronts
-  let appMeta = null;
   const hintCountry = (req.query.hintCountry || '').toLowerCase();
-  const lookupCandidates = Array.from(new Set([
-    hintCountry, 'kr', 'us', 'jp', 'gb', 'de', 'fr', 'cn', 'tw', 'ca', 'au', 'br', 'in', 'es', 'it', 'pl', 'cz', 'at', 'hu', 'tr', 'nl', 'se', 'no', 'dk', 'fi', 'sg', 'hk', 'mx', 'th', 'ph', 'id', 'vn', 'ae', 'sa', 'za'
-  ].filter(Boolean)));
-
-  for (const c of lookupCandidates) {
-    if (req.signal.aborted) return;
-    try {
-      const data = await iTunesLookup(appId, c, forceRefresh);
-      if (data.resultCount > 0) {
-        appMeta = data.results[0];
-        break;
-      }
-    } catch { /* try next candidate */ }
-  }
-
-  if (!appMeta) {
-    send({ type: 'error', message: 'App not found. Please check the App Store URL or ID.' });
-    return res.end();
-  }
-
+  const orderedCountries = countries.slice().sort((a, b) => Number(b.code === hintCountry) - Number(a.code === hintCountry));
   const allResults = [];
 
-  const tasks = countries.map((country) => async () => {
+  const tasks = orderedCountries.map((country) => async () => {
     if (req.signal.aborted || res.writableEnded || res.destroyed) return;
     try {
       const data = await iTunesLookup(appId, country.code, forceRefresh);
-      if (!data.resultCount || !isAvailableInStorefront(data.results[0], country.code)) {
-        const unavailable = {
-          country: country.code,
-          countryName: country.name,
-          flag: country.flag,
-          region: country.region,
-          available: false,
-          price: null,
-          currency: '',
-          formattedPrice: '',
-        };
+      const app = data.results[0];
+      if (data.resultCount === 0 || !isAvailableInStorefront(app, country.code)) {
+        const unavailable = unavailablePriceRow(country, 'unavailable');
         allResults.push(unavailable);
         send(unavailable);
         return;
       }
-      const app = data.results[0];
       const result = {
         country: country.code,
         countryName: country.name,
@@ -833,17 +824,7 @@ app.get('/api/prices-stream/:appId', asyncRoute(async (req, res) => {
       // A thrown lookup is a transient API failure, not "not available".
       // Emit an explicit row so the country never silently disappears from
       // the table between runs; the UI labels it "조회 실패".
-      const unavailable = {
-        country: country.code,
-        countryName: country.name,
-        flag: country.flag,
-        region: country.region,
-        available: false,
-        price: null,
-        currency: '',
-        formattedPrice: '',
-        fetchStatus: 'request-failed'
-      };
+      const unavailable = unavailablePriceRow(country, 'request-failed');
       allResults.push(unavailable);
       send(unavailable);
     }
@@ -893,9 +874,8 @@ app.get('/api/iap-stream/:appId', asyncRoute(async (req, res) => {
     let result = { country: country.code, iaps: [], fetchStatus: 'empty' };
     try {
       const lookup = await iTunesLookup(appId, country.code, forceRefresh);
-      const item = lookup.results?.[0];
-      if (!item || !isAvailableInStorefront(item, country.code)) result.fetchStatus = 'unavailable';
-      else if (!item.currency) result.fetchStatus = 'request-failed';
+      const item = lookup.results[0];
+      if (lookup.resultCount === 0 || !isAvailableInStorefront(item, country.code)) result.fetchStatus = 'unavailable';
       else {
         result.iaps = await scrapeIap(appId, country.code, item.currency);
         result.fetchStatus = result.iaps.length ? 'ok' : 'empty';
@@ -922,6 +902,75 @@ app.get('/api/iap-stream/:appId', asyncRoute(async (req, res) => {
   send({ type: 'done', total: results.length, completed, failed });
   res.end();
 }));
+
+function parseGooglePlayPage(html, country) {
+  const priceMeta = html.match(/<meta itemprop="price" content="([^"]+)"/);
+  const titleMatch = html.match(/<h1[^>]*><span[^>]*>(.*?)<\/span>/);
+  const devMatch = html.match(/\/store\/apps\/(?:developer|dev)\?id=[^"]*"><span>(.*?)<\/span>/);
+  const iconMatch = html.match(/src="(https:\/\/play-lh\.googleusercontent\.com\/[^"]+)"/);
+  const ratingMatch = html.match(/aria-label="Rated ([0-9.]+) stars out of five/i) || html.match(/([0-9.]+)\s*★/);
+
+  // Use priceCurrency from schema.org JSON-LD — this is the ACTUAL currency
+  // Google Play uses for this country (e.g. Cambodia uses USD, not KHR)
+  const priceCurrencyMatch = html.match(/"priceCurrency":"([A-Z]{3})"/);
+  const currency = priceCurrencyMatch ? priceCurrencyMatch[1] : (COUNTRY_CURRENCIES[country.code] || 'USD');
+  const priceStr = priceMeta ? priceMeta[1] : null;
+
+  // Countries without a real storefront get a stripped USD fallback page:
+  // no <meta itemprop="price"> (China, Cuba, Iran) or a USD page with no
+  // storefront data (Albania, Argentina, ...). Real USD storefronts (US,
+  // Ecuador, Cambodia, Gulf states) keep their per-item offers, so combine
+  // price-meta presence, currency, and per-item signal into one heuristic.
+  const hasPerItemOffers = /per item|per unit|항목당|pro Artikel|par article|por item|por artículo/i.test(html);
+  const realStorefront = priceMeta !== null && (currency !== 'USD' || country.code === 'us' || hasPerItemOffers);
+
+  if (!titleMatch) throw new Error('Unrecognized Google Play page');
+  if (!realStorefront) return unavailablePriceRow(country, 'no-storefront');
+
+  // The page embeds other apps' "per item" ranges in related-app offer
+  // blocks (each carries an offerId link) both before and after the app
+  // title, so a plain first match varies between requests. The app's own
+  // summary is the first occurrence after the <h1> title whose preceding
+  // context has no offerId. If it is missing, show no range rather than
+  // borrowing another app's numbers.
+  const perItemRe = /"((?:[\p{Sc}A-Z0-9\s.,]+(?:\s*[-\u2013\u2014]\s*[\p{Sc}A-Z0-9\s.,]+)?)\s*(?:per item|per unit|항목당|pro Artikel|par article|por item|por artículo))"/giu;
+  let iapRange = null;
+  const titlePos = html.indexOf(titleMatch[0]);
+  let perItemMatch;
+  while ((perItemMatch = perItemRe.exec(html)) !== null) {
+    if (perItemMatch.index <= titlePos) continue;
+    const before = html.slice(Math.max(0, perItemMatch.index - 350), perItemMatch.index);
+    if (/offerId/i.test(before)) continue;
+    iapRange = perItemMatch[1];
+    break;
+  }
+
+  const price = parseLocalizedPrice(priceStr, currency);
+  if (!Number.isFinite(price)) throw new Error('Invalid Google Play price');
+  const minMax = parseIapMinMax(iapRange, currency);
+  const iaps = buildGooglePlayIaps(iapRange, minMax, currency);
+
+  return {
+    country: country.code,
+    countryName: country.name,
+    flag: country.flag,
+    region: country.region,
+    available: true,
+    price,
+    currency,
+    formattedPrice: priceStr || (price === 0 ? 'Free' : ''),
+    iapRange: iapRange || null,
+    iaps,
+    appName: titleMatch[1],
+    artworkUrl: iconMatch ? iconMatch[1] : '',
+    developer: devMatch ? devMatch[1] : 'Developer',
+    rating: ratingMatch ? parseFloat(ratingMatch[1]) : null,
+    ratingCount: 0,
+    primaryGenreName: 'Google Play',
+    isFree: price === 0,
+    store: 'google'
+  };
+}
 
 // ─── Google Play Stream Route ──────────────────────────────────────────────────
 app.get('/api/google-prices-stream/:packageId', asyncRoute(async (req, res) => {
@@ -963,102 +1012,16 @@ app.get('/api/google-prices-stream/:packageId', asyncRoute(async (req, res) => {
   const fetchSingleCountry = async (country, { attempts = 3, timeout = 9000 } = {}) => {
     const url = `https://play.google.com/store/apps/details?id=${packageId}&gl=${country.code}&hl=en`;
     const resp = await getWithRetry(url, {
+      validateStatus: status => (status >= 200 && status < 300) || status === 404,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept-Language': 'en-US,en;q=0.9'
       },
       timeout
     }, attempts);
-    const html = resp.data;
-    const priceMeta = html.match(/<meta itemprop="price" content="([^"]+)"/);
-    const titleMatch = html.match(/<h1[^>]*><span[^>]*>(.*?)<\/span>/);
-    const devMatch = html.match(/\/store\/apps\/(?:developer|dev)\?id=[^"]*"><span>(.*?)<\/span>/);
-    const iconMatch = html.match(/src="(https:\/\/play-lh\.googleusercontent\.com\/[^"]+)"/);
-    const ratingMatch = html.match(/aria-label="Rated ([0-9.]+) stars out of five/i) || html.match(/([0-9.]+)\s*★/);
-
-    // Use priceCurrency from schema.org JSON-LD — this is the ACTUAL currency
-    // Google Play uses for this country (e.g. Cambodia uses USD, not KHR)
-    const priceCurrencyMatch = html.match(/"priceCurrency":"([A-Z]{3})"/);
-    const currency = priceCurrencyMatch ? priceCurrencyMatch[1] : (COUNTRY_CURRENCIES[country.code] || 'USD');
-    const priceStr = priceMeta ? priceMeta[1] : null;
-
-    // Countries without a real storefront get a stripped USD fallback page:
-    // no <meta itemprop="price"> (China, Cuba, Iran) or a USD page with no
-    // storefront data (Albania, Argentina, ...). Real USD storefronts (US,
-    // Ecuador, Cambodia, Gulf states) keep their per-item offers, so combine
-    // price-meta presence, currency, and per-item signal into one heuristic.
-    const hasPerItemOffers = /per item|per unit|항목당|pro Artikel|par article|por item|por artículo/i.test(html);
-    const realStorefront = priceMeta !== null && (currency !== 'USD' || country.code === 'us' || hasPerItemOffers);
-
-    if (!titleMatch || !realStorefront) {
-      return {
-        country: country.code,
-        countryName: country.name,
-        flag: country.flag,
-        region: country.region,
-        available: false,
-        price: null,
-        currency: '',
-        formattedPrice: '',
-        fetchStatus: realStorefront ? 'no-title' : 'no-storefront'
-      };
-    }
-
-    // The page embeds other apps' "per item" ranges in related-app offer
-    // blocks (each carries an offerId link) both before and after the app
-    // title, so a plain first match varies between requests. The app's own
-    // summary is the first occurrence after the <h1> title whose preceding
-    // context has no offerId. If it is missing, show no range rather than
-    // borrowing another app's numbers.
-    const perItemRe = /"((?:[\$₩€₹£¥R\$Rs\.A-Z0-9\xa0\s.,]+(?:\s*[-\u2013\u2014]\s*[\$₩€₹£¥R\$Rs\.A-Z0-9\xa0\s.,]+)?)\s*(?:per item|per unit|항목당|pro Artikel|par article|por item|por artículo))"/gi;
-    let iapRange = null;
-    const titlePos = html.indexOf(titleMatch[0]);
-    let perItemMatch;
-    while ((perItemMatch = perItemRe.exec(html)) !== null) {
-      if (perItemMatch.index <= titlePos) continue;
-      const before = html.slice(Math.max(0, perItemMatch.index - 350), perItemMatch.index);
-      if (/offerId/i.test(before)) continue;
-      iapRange = perItemMatch[1];
-      break;
-    }
-
-    const price = parseLocalizedPrice(priceStr, currency);
-    const minMax = parseIapMinMax(iapRange, currency);
-    const iaps = buildGooglePlayIaps(iapRange, minMax, currency);
-
-    return {
-      country: country.code,
-      countryName: country.name,
-      flag: country.flag,
-      region: country.region,
-      available: true,
-      price,
-      currency,
-      formattedPrice: priceStr || (price === 0 ? 'Free' : ''),
-      iapRange: iapRange || null,
-      iaps,
-      appName: titleMatch[1],
-      artworkUrl: iconMatch ? iconMatch[1] : '',
-      developer: devMatch ? devMatch[1] : 'Developer',
-      rating: ratingMatch ? parseFloat(ratingMatch[1]) : null,
-      ratingCount: 0,
-      primaryGenreName: 'Google Play',
-      isFree: price === 0,
-      store: 'google'
-    };
+    if (resp.status === 404) return unavailablePriceRow(country, 'unavailable');
+    return parseGooglePlayPage(resp.data, country);
   };
-
-  const failedRow = (country) => ({
-    country: country.code,
-    countryName: country.name,
-    flag: country.flag,
-    region: country.region,
-    available: false,
-    price: null,
-    currency: '',
-    formattedPrice: '',
-    fetchStatus: 'request-failed'
-  });
 
   // Pass 1: fetch every country. Rows that are definitively unavailable
   // (real page, no storefront) are sent immediately; transient failures are
@@ -1091,7 +1054,7 @@ app.get('/api/google-prices-stream/:packageId', asyncRoute(async (req, res) => {
         allResults.push(result);
         send(result);
       } catch {
-        const unavailable = failedRow(country);
+        const unavailable = unavailablePriceRow(country, 'request-failed');
         allResults.push(unavailable);
         send(unavailable);
       }
@@ -1119,4 +1082,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, parseLocalizedPrice, parseIapMinMax, buildGooglePlayIaps, extractIapPairs };
+module.exports = { app, parseLocalizedPrice, parseIapMinMax, buildGooglePlayIaps, extractIapPairs, parseGooglePlayPage };

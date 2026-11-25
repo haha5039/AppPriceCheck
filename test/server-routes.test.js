@@ -21,9 +21,21 @@ const mockClient = {
       if (url.pathname.startsWith('/kr/')) throw Object.assign(new Error('upstream failure'), {response: {status:400}});
       return {data:'<script>{"textPairs":[["Pro","$9.99"]]}</script>'};
     }
-    if (url.hostname === 'play.google.com') return {data:'<meta itemprop="price" content="0"><script>"priceCurrency":"USD"</script><h1><span>Fixture</span></h1>"$1.00 - $9.00 per item"'};
+    if (url.hostname === 'play.google.com') {
+      if (id === 'com.example.missing') {
+        assert.equal(options.validateStatus(404), true);
+        return { status: 404, data: 'Not found' };
+      }
+      return {data:'<meta itemprop="price" content="0"><script>"priceCurrency":"USD"</script><h1><span>Fixture</span></h1>"$1.00 - $9.00 per item"'};
+    }
     if (url.pathname === '/search') return {data: {results:[{trackId:123456,trackName:'Fixture',price:0}]}};
-    if (failKorea && url.searchParams.get('country') === 'kr') throw Object.assign(new Error('upstream failure'), {response:{status:400}});
+    const country = url.searchParams.get('country');
+    if ((failKorea || id === '777777') && country === 'kr') {
+      throw Object.assign(new Error('upstream failure'), { response: { status: 400 } });
+    }
+    if (id === '888888' || id === '777777' || (id === '666666' && country !== 'ie')) {
+      return { data: { resultCount: 0, results: [] } };
+    }
     return {data:{resultCount:1,results:[{trackId:Number(id),trackName:'Fixture',price:10,currency:'USD',trackViewUrl:`https://apps.apple.com/${url.searchParams.get('country')}/app/id${id}`}]}};
   }
 };
@@ -71,6 +83,24 @@ test('selected-country price stream ends exactly once and preserves cached subse
   assert.equal(cached.at(-1).fromCache, true);
 });
 
+test('Apple queries only the requested countries and discovers apps sold solely in Ireland', async () => {
+  const before = calls.length;
+  const result = await events('/api/prices-stream/666666?countries=ie&hintCountry=us');
+  assert.equal(result[0].available, true);
+  assert.equal(result[0].country, 'ie');
+  assert.deepEqual(calls.slice(before).map(raw => new URL(raw).searchParams.get('country')), ['ie']);
+  assert.equal(result[1].type, 'done');
+});
+
+test('Apple emits one row per country and distinguishes a complete absence from mixed failures', async () => {
+  const absent = await events('/api/prices-stream/888888?countries=us,kr');
+  assert.deepEqual(absent.map(row => row.fetchStatus || row.type), ['unavailable', 'unavailable', 'done']);
+  const partial = await events('/api/prices-stream/777777?countries=us,kr');
+  assert.equal(partial.find(row => row.country === 'kr').fetchStatus, 'request-failed');
+  assert.equal(partial.find(row => row.country === 'us').fetchStatus, 'unavailable');
+  assert.equal(partial.at(-1).type, 'done');
+});
+
 test('transient price failures are explicit and not replayed from aggregate cache', async () => {
   failKorea = true;
   const first = await events('/api/prices-stream/234567?countries=us,kr');
@@ -94,6 +124,30 @@ test('Google Play fixture retains IAP edges and emits one terminal event', async
   const result = await events('/api/google-prices-stream/com.example.app?countries=us');
   assert.deepEqual(result.find(r => r.country === 'us').iaps.map(i => i.price), [1,9]);
   assert.equal(result.filter(r => r.type === 'done').length, 1);
+});
+
+test('Google Play 404 is a cacheable unavailable row and never enters the retry pass', async () => {
+  const before = calls.length;
+  const path = '/api/google-prices-stream/com.example.missing?countries=us';
+  const first = await events(path);
+  assert.equal(first.find(row => row.country === 'us').fetchStatus, 'unavailable');
+  assert.equal(first.some(row => row.noticeType === 'retry'), false);
+  await events(path);
+  assert.equal(calls.length - before, 1);
+});
+
+test('static serving includes only public assets and CORS covers API responses and errors', async () => {
+  assert.equal((await fetch(base + '/')).status, 200);
+  for (const path of ['/server.js', '/server.log', '/package-lock.json', '/test/server-routes.test.js']) {
+    assert.equal((await fetch(base + path)).status, 404, path);
+  }
+  const origin = process.env.PAGES_ORIGIN || 'https://haha5039.github.io';
+  const allowed = await fetch(base + '/api/prices-stream/invalid', { headers: { Origin: origin } });
+  assert.equal(allowed.status, 400);
+  assert.equal(allowed.headers.get('access-control-allow-origin'), origin);
+  assert.match(allowed.headers.get('vary'), /Origin/);
+  const unrelated = await fetch(base + '/api/countries', { headers: { Origin: 'https://unrelated.example' } });
+  assert.equal(unrelated.headers.get('access-control-allow-origin'), null);
 });
 
 test('disconnect aborts in-flight upstream request without launching the next country', async () => {

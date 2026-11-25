@@ -15,7 +15,6 @@ let currentAppId = '';
 let currentStore = 'apple';
 let currentHintCountry = null;
 let currentAppIsFree = false;
-let activeIapStream = null;
 let currentSearchToken = 0;
 let searchController = null;
 let compareController = null;
@@ -227,26 +226,6 @@ function parseAppStoreUrl(input) {
   return null;
 }
 
-// Client-side copy of the server currency map. Used by the GitHub Pages IAP
-// scanner, which has no access to /api/* endpoints.
-const COUNTRY_CURRENCIES = {
-  us: 'USD', ca: 'CAD', mx: 'MXN', br: 'BRL', ar: 'ARS', cl: 'CLP', co: 'COP', pe: 'PEN',
-  uy: 'UYU', bo: 'BOB', ec: 'USD', cr: 'CRC', gt: 'GTQ', py: 'PYG', do: 'DOP', jm: 'JMD', tt: 'TTD',
-  gb: 'GBP', de: 'EUR', fr: 'EUR', it: 'EUR', es: 'EUR', nl: 'EUR', se: 'SEK', no: 'NOK',
-  dk: 'DKK', fi: 'EUR', pl: 'PLN', be: 'EUR', at: 'EUR', ch: 'CHF', pt: 'EUR', ie: 'EUR',
-  cz: 'CZK', hu: 'HUF', ro: 'RON', gr: 'EUR', tr: 'TRY', ua: 'UAH', ru: 'RUB', sk: 'EUR',
-  bg: 'BGN', hr: 'EUR', si: 'EUR', lt: 'EUR', lv: 'EUR', ee: 'EUR', lu: 'EUR', mt: 'EUR',
-  cy: 'EUR', is: 'ISK', al: 'ALL', rs: 'RSD', mk: 'MKD', md: 'MDL', am: 'AMD', ge: 'GEL',
-  az: 'AZN', kz: 'KZT',
-  jp: 'JPY', kr: 'KRW', cn: 'CNY', au: 'AUD', nz: 'NZD', sg: 'SGD', hk: 'HKD', tw: 'TWD',
-  in: 'INR', th: 'THB', ph: 'PHP', my: 'MYR', id: 'IDR', vn: 'VND', pk: 'PKR', lk: 'LKR',
-  mn: 'MNT', np: 'NPR', mm: 'MMK', kh: 'KHR', bn: 'BND', uz: 'UZS', kg: 'KGS',
-  ae: 'AED', sa: 'SAR', kw: 'KWD', qa: 'QAR', bh: 'BHD', om: 'OMR', jo: 'JOD', eg: 'EGP',
-  il: 'ILS', lb: 'LBP', iq: 'IQD',
-  za: 'ZAR', ng: 'NGN', ke: 'KES', gh: 'GHS', tz: 'TZS', ma: 'MAD', ug: 'UGX', sn: 'XOF',
-  dz: 'DZD', tn: 'TND', et: 'ETB', zm: 'ZMW', cm: 'XAF', ci: 'XOF', mz: 'MZN',
-};
-
 const COUNTRY_TAX_NOTES = {
   ar: '🇦🇷 아르헨티나: 해외 카드 결제 시 60% 카드세(PAIS) 및 환율 변동 주의가 필요합니다.',
   tr: '🇹🇷 튀르키예: 최근 애플/구글 티어 인상 및 환율 변동성이 높은 지역입니다.',
@@ -271,12 +250,13 @@ function fmtUSD(amount) {
 function fmtLocal(price, currency, formattedPrice) {
   if (price === 0) return '<span class="free-badge">무료</span>';
   if (formattedPrice) return escHtml(formattedPrice);
+  if (!Number.isFinite(price)) return '가격 확인 필요';
   try {
     return new Intl.NumberFormat('en-US', {
       style: 'currency', currency, maximumFractionDigits: 2,
     }).format(price);
   } catch {
-    return `${currency} ${price.toFixed(2)}`;
+    return escHtml(`${currency} ${price.toFixed(2)}`);
   }
 }
 
@@ -305,11 +285,13 @@ function toBaseVal(price, currency, countryCode = 'us', baseCurrencyOverride) {
   return Number.isFinite(rate) && rate > 0 ? usd * rate : null;
 }
 
-function fmtBaseVal(val, currOverride) {
+function fmtMoney(val, currency = currentBaseCurrency) {
   if (!Number.isFinite(val)) return '환산 불가';
-  if (val === 0) return '무료';
-  const currency = currOverride || currentBaseCurrency;
   return new Intl.NumberFormat('ko-KR', { style: 'currency', currency }).format(val);
+}
+
+function fmtBaseVal(val, currOverride) {
+  return val === 0 ? '무료' : fmtMoney(val, currOverride);
 }
 
 // Diff CSS class
@@ -382,11 +364,6 @@ function initModalKeyboard() {
   }, true);
 }
 
-function closeActiveStreams() {
-  if (activeIapStream) activeIapStream.close();
-  activeIapStream = null;
-}
-
 function configureStorePresentation(store) {
   const isGoogle = store === 'google';
   const iapTitle = $('iap-title');
@@ -425,7 +402,33 @@ function updateStoreBadge(store) {
 
 // ─── Fetch Exchange Rates ─────────────────────────────────────────────────────
 function isStaticHosting() {
-  return window.location.hostname.endsWith('.github.io') || window.location.protocol === 'file:';
+  return Boolean(getConfiguredApiOrigin()) || window.location.hostname.endsWith('.github.io') || window.location.protocol === 'file:';
+}
+
+function getConfiguredApiOrigin() {
+  const configured = document.querySelector('meta[name="appprice-api-base-url"]')?.content;
+  if (!configured) return '';
+  let url;
+  try { url = new URL(configured); }
+  catch { return ''; }
+  return url.protocol === 'https:' && url.href === url.origin + '/' ? url.origin : '';
+}
+
+function storefrontApiUrl(path, params) {
+  const origin = getConfiguredApiOrigin();
+  if (!origin && isStaticHosting()) throw new Error('가격 조회 서버 주소가 설정되지 않았습니다.');
+  return `${origin}/api/${path}${params?.size ? `?${params}` : ''}`;
+}
+
+async function cleanUpLegacyOfflineData(scriptUrl) {
+  if (!scriptUrl || !navigator.serviceWorker) return;
+  const workerUrl = new URL('sw.js', scriptUrl).href;
+  const scope = new URL('./', workerUrl).href;
+  const registrations = await navigator.serviceWorker.getRegistrations();
+  const workers = registrations.filter(reg => reg.scope === scope &&
+    [reg.active, reg.waiting, reg.installing].some(worker => worker?.scriptURL === workerUrl));
+  await Promise.allSettled(workers.map(reg => reg.unregister()));
+  await window.caches?.delete('appprice-v2.0.0');
 }
 
 async function fetchExchangeRates(forceRefresh = false, signal) {
@@ -480,7 +483,9 @@ function fetchJSONP(url, signal) {
 
 async function fetchITunesJSONP(appId, country, signal) {
   const data = await fetchJSONP(`https://itunes.apple.com/lookup?id=${encodeURIComponent(appId)}&country=${country}`, signal);
-  return data?.resultCount > 0 ? data.results?.[0] || null : null;
+  if (!Array.isArray(data?.results) || data.resultCount !== data.results.length ||
+      (data.resultCount > 0 && !data.results[0])) throw new Error('잘못된 App Store 응답');
+  return data.results[0] || null;
 }
 
 async function searchAppsByName(query, signal) {
@@ -501,18 +506,6 @@ async function searchAppsByName(query, signal) {
     if (data.results?.length) return data.results;
   }
   return [];
-}
-
-async function fetchStorefrontHtml(url, signal) {
-  const encoded = encodeURIComponent(url);
-  for (const proxy of [`https://api.allorigins.win/raw?url=${encoded}`, `https://corsproxy.io/?url=${encoded}`]) {
-    if (signal?.aborted) throw new DOMException('취소됨', 'AbortError');
-    try {
-      const res = await fetch(proxy, { signal: requestSignal(signal, 25000) });
-      if (res.ok) return await res.text();
-    } catch (error) { if (signal?.aborted) throw error; }
-  }
-  throw new Error('공개 페이지 조회 실패');
 }
 
 function updateAppHeaderMeta() {
@@ -600,9 +593,10 @@ function updateStats() {
   }
 
   $('countries-count').textContent = availableItems.length;
+  $('avg-price-currency').textContent = `${currentBaseCurrency} ${isPppMode ? 'PPP ' : ''}환산 기준`;
 
   renderChart();
-  renderInsights();
+  renderInsights(comparableItems);
 }
 
 // ─── Region Heatmap Update ───────────────────────────────────────────────────
@@ -645,14 +639,9 @@ function renderRegionHeatmap() {
 }
 
 // ─── Insights Update ─────────────────────────────────────────────────────────
-function renderInsights() {
+function renderInsights(availableItems) {
   const insightSection = $('insight-section');
   if (!insightSection) return;
-
-  const availableItems = priceData
-    .filter(i => i.available !== false)
-    .map(i => ({ ...i, val: toBaseVal(i.price, i.currency, i.country) }))
-    .filter(i => i.val !== null);
 
   if (availableItems.length === 0) {
     hide('insight-section');
@@ -661,30 +650,25 @@ function renderInsights() {
 
   show('insight-section');
 
-  const paidItems = availableItems.filter(i => i.val > 0).sort((a, b) => a.val - b.val);
+  const paidItems = availableItems.filter(i => i.val > 0);
   const usItem = availableItems.find(i => i.country === 'us');
-  const usVal = usItem ? usItem.val : null;
+  const usVal = usItem?.val ?? null;
+  const cheapest = availableItems[0];
+
+  show('insight-best-deal');
+  $('insight-best-country').textContent = `${cheapest.flag} ${cheapest.countryName}`;
+  const diffPct = usVal > 0 ? diffLabel(((cheapest.val - usVal) / usVal) * 100) : '';
+  $('insight-best-saving').textContent = `${fmtBaseVal(cheapest.val)}${diffPct ? ` (${diffPct})` : ''}`;
+
+  if (usVal !== null) {
+    show('insight-savings');
+    $('insight-max-saving').textContent = fmtMoney(Math.max(0, usVal - cheapest.val));
+    $('insight-saving-countries').textContent = `미국(${fmtBaseVal(usVal)}) 대비 최저가 선택 시 절약`;
+  } else hide('insight-savings');
 
   if (paidItems.length > 0) {
-    show('insight-best-deal');
-    show('insight-savings');
     show('insight-sweet-spot');
-
-    const cheapest = paidItems[0];
-    const priciest = paidItems[paidItems.length - 1];
-
-    // Best deal country
-    const diffPct = usVal > 0 ? (((cheapest.val - usVal) / usVal) * 100).toFixed(1) : 0;
-    $('insight-best-country').textContent = `${cheapest.flag} ${cheapest.countryName}`;
-    $('insight-best-saving').textContent = usVal > 0 ? `${fmtBaseVal(cheapest.val)} (${diffPct > 0 ? '+' : ''}${diffPct}%)` : `${fmtBaseVal(cheapest.val)} · 미국 기준가 없음`;
-
-    // Max savings vs US
-    const savedVal = usVal === null ? null : Math.max(0, usVal - cheapest.val);
-    $('insight-max-saving').textContent = fmtBaseVal(savedVal);
-    $('insight-saving-countries').textContent = `미국(${fmtBaseVal(usVal)}) 대비 최저가 선택 시 절약`;
-
-    // Pricing strategy
-    const variance = priciest.val / (cheapest.val || 1);
+    const variance = paidItems[paidItems.length - 1].val / paidItems[0].val;
     if (variance > 2.5) {
       $('insight-stable-countries').textContent = '동적 지역 가격 정책';
       $('insight-stable-detail').textContent = `최저/최고가 격차 약 ${variance.toFixed(1)}배 (지역별 차등 적용)`;
@@ -693,20 +677,12 @@ function renderInsights() {
       $('insight-stable-detail').textContent = `전 세계 국가 간 가격 차이가 약 ${((variance - 1) * 100).toFixed(0)}% 이내로 고정`;
     }
 
-    // Free count
-    const freeCount = availableItems.filter(i => i.price === 0).length;
-    $('insight-free-count').textContent = `${freeCount}개 국가`;
-    $('insight-free-detail').textContent = freeCount > 0 ? '일부 국가에서 앱이 무료로 제공됨' : '전 세계 모든 지원 국가에서 유료 판매';
+  } else hide('insight-sweet-spot');
 
-  } else {
-    // All free
-    hide('insight-best-deal');
-    hide('insight-savings');
-    hide('insight-sweet-spot');
-
-    $('insight-free-count').textContent = `${availableItems.length}개 국가`;
-    $('insight-free-detail').textContent = '가격이 확인된 국가에서 무료로 제공 중';
-  }
+  const freeCount = availableItems.length - paidItems.length;
+  $('insight-free-count').textContent = `${freeCount}개 국가`;
+  $('insight-free-detail').textContent = freeCount === 0 ? '확인된 무료 국가 없음'
+    : freeCount === availableItems.length ? '가격이 확인된 국가에서 무료로 제공 중' : '일부 국가에서 앱이 무료로 제공됨';
 }
 
 // ─── Table Rendering ──────────────────────────────────────────────────────────
@@ -719,22 +695,11 @@ function renderTable() {
     thBase.textContent = isPppMode ? `PPP (${currentBaseCurrency})` : currentBaseCurrency;
   }
 
-  // Filter
   const uniqueData = getUniqueCountries(priceData);
-  let rows = uniqueData.filter(item => {
-    const regionOk = currentRegion === 'all' || item.region === currentRegion;
-    const q = countrySearchQuery.toLowerCase();
-    const searchOk = !q ||
-      item.countryName.toLowerCase().includes(q) ||
-      item.country.toLowerCase().includes(q);
-    return regionOk && searchOk;
-  });
-
-  // Attach base currency / PPP price + diff
   const usItem = uniqueData.find(i => i.country === 'us' && i.available !== false);
   const usVal = usItem ? toBaseVal(usItem.price, usItem.currency, 'us') : null;
 
-  rows = rows.map(item => {
+  let rows = uniqueData.map(item => {
     const available = item.available !== false;
     const val = available ? toBaseVal(item.price, item.currency, item.country) : null;
     const diff = (usVal !== null && usVal > 0 && val !== null && val > 0)
@@ -743,11 +708,20 @@ function renderTable() {
     return { ...item, available, val, diff };
   });
 
-  // Tier Filter
+  const ranked = currentTierFilter === 'exp-top'
+    ? rows.map(row => row.val).filter(Number.isFinite).sort((a, b) => b - a)
+    : [];
+  const topPrice = ranked[Math.ceil(ranked.length * 0.1) - 1];
+  const q = countrySearchQuery.toLowerCase();
   rows = rows.filter(r => {
+    if (currentRegion !== 'all' && r.region !== currentRegion) return false;
+    if (q && !r.countryName.toLowerCase().includes(q) && !r.country.toLowerCase().includes(q)) return false;
     if (currentTierFilter === 'cheap-30') return r.diff !== null && r.diff <= -30;
-    if (currentTierFilter === 'sub-5') return r.val !== null && r.val <= 5;
-    if (currentTierFilter === 'exp-top') return r.diff !== null && r.diff >= 20;
+    if (currentTierFilter === 'sub-5') {
+      const usd = r.available ? toUSD(r.price, r.currency) : null;
+      return usd !== null && usd <= 5;
+    }
+    if (currentTierFilter === 'exp-top') return Number.isFinite(r.val) && r.val >= topPrice;
     return true;
   });
 
@@ -759,8 +733,6 @@ function renderTable() {
     case 'diff-asc':  rows.sort((a, b) => (a.diff ?? Infinity) - (b.diff ?? Infinity)); break;
     case 'diff-desc': rows.sort((a, b) => (b.diff ?? -Infinity) - (a.diff ?? -Infinity)); break;
   }
-
-  const maxVal = Math.max(1, ...rows.filter(r => r.available && r.val > 0).map(r => r.val));
 
   if (rows.length === 0) {
     tbody.innerHTML = `<tr><td colspan="5" class="table-placeholder">조건과 일치하는 국가가 없습니다.</td></tr>`;
@@ -803,8 +775,7 @@ function renderTable() {
     fragment.appendChild(tr);
   });
 
-  tbody.innerHTML = '';
-  tbody.appendChild(fragment);
+  tbody.replaceChildren(fragment);
 }
 
 // ─── IAP Loading ──────────────────────────────────────────────────────────────
@@ -859,302 +830,53 @@ function renderIapSummary(finished = false) {
     renderIapTable();
   } else {
     $('iap-select').disabled = true;
-    $('iap-select').innerHTML = '<option value="">확인된 인앱결제 항목 없음</option>';
-    $('iap-tbody').innerHTML = `<tr><td colspan="5" class="table-placeholder">${failed ? '일부 국가를 조회하지 못했습니다. 다시 조회해 주세요.' : '확인된 공개 페이지에 인앱결제 가격이 없습니다.'}</td></tr>`;
+    $('iap-select').innerHTML = finished ? '<option value="">확인된 인앱결제 항목 없음</option>'
+      : '<option value="">인앱결제 항목 확인 중</option>';
+    const message = !finished ? '인앱결제 가격을 확인하는 중입니다.'
+      : failed ? '일부 국가를 조회하지 못했습니다. 다시 조회해 주세요.'
+      : '확인된 공개 페이지에 인앱결제 가격이 없습니다.';
+    $('iap-tbody').innerHTML = `<tr><td colspan="5" class="table-placeholder">${message}</td></tr>`;
   }
   setIapStatus(`IAP ${finished ? '조회 완료' : '확인 중'} · ${statuses.length}개국 확인 · 실패 ${failed}${reference ? '' : ' · 확인된 가격 없음'}`, finished);
   if ($('retry-iap-btn')) $('retry-iap-btn').disabled = !finished || failed === 0;
 }
 
-async function loadIapData(appId, forceRefresh = false, token = currentSearchToken, signal = searchController?.signal, codes = null) {
-  if (token !== currentSearchToken || signal?.aborted) return;
+async function loadIapData(appId, forceRefresh = false, token = currentSearchToken, signal = searchController.signal, codes = null) {
+  if (token !== currentSearchToken || signal.aborted) return;
+  const expected = codes || (isStaticHosting() ? PAGES_APPLE_IAP_COUNTRY_CODES : APP_STORE_COUNTRIES.map(c => c.code));
+  if (!expected.length) return;
   show('iap-section');
+  renderIapSummary();
   $('iap-loading').classList.remove('hidden');
   setIapStatus('인앱결제 공개 가격을 확인하는 중…');
-  if (isStaticHosting()) return loadIapDataClientSide(appId, token, signal, codes);
-  const params = new URLSearchParams();
+
+  const received = new Set();
+  const params = new URLSearchParams({ countries: expected.join(',') });
   if (forceRefresh) params.set('refresh', '1');
-  if (codes?.length) params.set('countries', codes.join(','));
-  const expected = codes || APP_STORE_COUNTRIES.map(c => c.code);
-  await new Promise(resolve => {
-    const es = new EventSource(`/api/iap-stream/${appId}?${params}`);
-    activeIapStream = es;
-    let settled = false;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(deadline);
-      es.close();
-      signal?.removeEventListener('abort', finish);
-      if (activeIapStream === es) activeIapStream = null;
-      if (token === currentSearchToken && !signal?.aborted) {
-        for (const code of expected) if (!iapStatuses[code]) iapStatuses[code] = 'request-failed';
-        renderIapSummary(true);
-      }
-      resolve();
-    };
-    const deadline = setTimeout(finish, 180000);
-    signal?.addEventListener('abort', finish, { once: true });
-    es.onmessage = event => {
-      if (token !== currentSearchToken || signal?.aborted) return finish();
-      let data;
-      try { data = JSON.parse(event.data); } catch { return; }
-      if (data.type === 'done' || data.type === 'error') return finish();
-      if (data.country && data.type === 'data') {
-        iapsByCountry[data.country] = data.iaps || [];
-        iapStatuses[data.country] = data.fetchStatus || (data.iaps?.length ? 'ok' : 'empty');
-        renderIapSummary();
-      }
-    };
-    es.onerror = finish;
-  });
-}
-
-async function loadIapDataClientSide(appId, token = currentSearchToken, signal = searchController?.signal, codes = null) {
-  const supported = ['us', 'kr', 'jp', 'gb', 'de', 'fr', 'ca', 'au', 'hu', 'pk', 'es', 'it', 'pl', 'cz', 'cn', 'tw', 'br', 'in'];
-  const countries = codes ? supported.filter(c => codes.includes(c)) : supported;
-  await limitedParallel(countries.map(country => async () => {
-    if (signal?.aborted) return;
-    let items = [], status = 'empty';
-    try {
-      const app = await fetchITunesJSONP(appId, country, signal);
-      const countryInfo = APP_STORE_COUNTRIES.find(c => c.code === country);
-      if (!app || !applePriceRow(app, countryInfo).available) status = 'unavailable';
-      else if (!app.currency) status = 'request-failed';
-      else {
-        const html = await fetchStorefrontHtml(`https://apps.apple.com/${country}/app/id${appId}`, signal);
-        const seen = new Map();
-        items = extractIapPairsClient(html).map(([trackName, formattedPrice]) => ({ trackName, formattedPrice,
-          price: parseLocalizedPriceClient(formattedPrice, app.currency), currency: app.currency }))
-          .filter(i => i.price !== null).sort((a, b) => a.price - b.price)
-          .map(i => ({ ...i, trackKey: makeIapKeyClient(i.trackName, seen) }));
-        status = items.length ? 'ok' : 'empty';
-      }
-    } catch { status = 'request-failed'; }
-    if (token !== currentSearchToken || signal?.aborted) return;
-    iapsByCountry[country] = items;
-    iapStatuses[country] = status;
-    renderIapSummary();
-  }), 4);
-  if (token === currentSearchToken && !signal?.aborted) renderIapSummary(true);
-}
-
-function makeIapKeyClient(name, seenNames) {
-  const base = name.toLowerCase().replace(/\s+/g, ' ').trim();
-  const occ = (seenNames.get(base) || 0) + 1;
-  seenNames.set(base, occ);
-  return `${base}__${occ}`;
-}
-
-function decodeHtmlClient(value) {
-  return String(value)
-    .replace(/<br\s*\/?\s*>/gi, ' ')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&quot;/gi, '"')
-    .replace(/&#(?:x0*27|39);/gi, "'")
-    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
-    .replace(/&#(\d+);/g, (_, decimal) => String.fromCodePoint(Number(decimal)))
-    .trim();
-}
-
-function extractIapPairsClient(html) {
-  const pairs = [];
-
-  // Method 1: Structured "textPairs" JSON arrays from the bootstrap payload.
-  // This mirrors the server-side parser and avoids duplicated matches when the
-  // expanded items_V3 objects coexist with the presentation divs.
-  const textPairsRe = /"textPairs":\s*(\[)/g;
-  let tpMatch;
-  while ((tpMatch = textPairsRe.exec(html)) !== null) {
-    const start = tpMatch.index + tpMatch[0].indexOf('[');
-    let depth = 0;
-    let i = start;
-    for (; i < html.length; i += 1) {
-      const ch = html[i];
-      if (ch === '\\') { i += 1; continue; }
-      if (ch === '[') depth += 1;
-      else if (ch === ']') {
-        depth -= 1;
-        if (depth === 0) break;
-      }
-    }
-    try {
-      const parsed = JSON.parse(html.slice(start, i + 1));
-      for (const entry of parsed) {
-        const name = Array.isArray(entry) ? entry[0] : null;
-        const price = Array.isArray(entry) ? entry[1] : null;
-        if (name && price && /\d/.test(String(price))) pairs.push([name, price]);
-      }
-    } catch { /* skip malformed array */ }
-    if (pairs.length > 0) break;
-  }
-
-  if (pairs.length > 0) return pairs;
-
-  // Method 2: Target presentation HTML text-pair divs
-  const pairRe = /<div\b[^>]*\btext-pair\b[^>]*>\s*<span\b[^>]*>([\s\S]*?)<\/span>\s*<span\b[^>]*>([\s\S]*?)<\/span>/gi;
-  let match;
-  while ((match = pairRe.exec(html)) !== null) {
-    const name = decodeHtmlClient(match[1]);
-    const price = decodeHtmlClient(match[2]);
-    if (name && price && /\d/.test(price)) {
-      pairs.push([name, price]);
-    }
-  }
-
-  if (pairs.length > 0) return pairs;
-
-  // Method 3: Bootstrap JSON items_V3 fallback
-  const v3Re = /"leadingText":"((?:\\.|[^"\\])*)","trailingText":"((?:\\.|[^"\\])*)"/g;
-  while ((match = v3Re.exec(html)) !== null) {
-    try {
-      const name = JSON.parse(`"${match[1]}"`);
-      const price = JSON.parse(`"${match[2]}"`);
-      if (name && price && /\d/.test(price)) {
-        pairs.push([name, price]);
-      }
-    } catch { /* ignore malformed */ }
-  }
-
-  return pairs;
-}
-
-function parseLocalizedPriceClient(formattedPrice, currency) {
-  if (!formattedPrice || !currency) return null;
-
-  const rawPrice = String(formattedPrice);
-  const indonesianCompact = rawPrice.match(/([\d][\d\s.,'’]*)\s*(ribu|juta)\b/i);
-  if (currency === 'IDR' && indonesianCompact) {
-    const compactNumber = indonesianCompact[1].replace(/[\s'’]/g, '');
-    const separatorIndex = Math.max(compactNumber.lastIndexOf(','), compactNumber.lastIndexOf('.'));
-    const amount = separatorIndex === -1
-      ? Number(compactNumber)
-      : Number(`${compactNumber.slice(0, separatorIndex).replace(/[.,]/g, '')}.${compactNumber.slice(separatorIndex + 1)}`);
-    const multiplier = indonesianCompact[2].toLocaleLowerCase('id-ID') === 'juta'
-      ? 1_000_000
-      : 1_000;
-    return Number.isFinite(amount) ? amount * multiplier : null;
-  }
-
-  const compactMultiplier = /(?:juta|million|millionen)/i.test(rawPrice)
-    ? 1_000_000
-    : /(?:ribu|thousand|tausend)/i.test(rawPrice)
-      ? 1_000
-      : 1;
-  const numeric = rawPrice
-    .replace(/\u00a0|\u202f/g, ' ')
-    .match(/[\d][\d\s.,'’]*/)?.[0]
-    ?.replace(/[\s'’]/g, '');
-
-  if (!numeric) return null;
-
-  if (/\.\d{2}$/.test(numeric)) {
-    const lastDot = numeric.lastIndexOf('.');
-    const whole = numeric.slice(0, lastDot).replace(/[.,]/g, '');
-    const dec = numeric.slice(lastDot + 1);
-    const parsed = Number(`${whole}.${dec}`);
-    if (Number.isFinite(parsed)) return parsed * compactMultiplier;
-  } else if (/,\d{2}$/.test(numeric)) {
-    const lastComma = numeric.lastIndexOf(',');
-    const whole = numeric.slice(0, lastComma).replace(/[.,]/g, '');
-    const dec = numeric.slice(lastComma + 1);
-    const parsed = Number(`${whole}.${dec}`);
-    if (Number.isFinite(parsed)) return parsed * compactMultiplier;
-  }
-
-  let fractionDigits = 2;
+  let connectionError = '';
   try {
-    fractionDigits = new Intl.NumberFormat('en-US', { style: 'currency', currency })
-      .resolvedOptions().maximumFractionDigits;
-  } catch { /* default to 2 */ }
-
-  if (fractionDigits === 0) {
-    const parsed = Number(numeric.replace(/[.,]/g, ''));
-    return Number.isFinite(parsed) ? parsed * compactMultiplier : null;
+    const result = await collectPriceStream(storefrontApiUrl(`iap-stream/${appId}`, params), signal, data => {
+      if (token !== currentSearchToken || signal.aborted || data.type !== 'data' || !expected.includes(data.country)) return;
+      received.add(data.country);
+      iapsByCountry[data.country] = data.iaps || [];
+      iapStatuses[data.country] = data.fetchStatus || (data.iaps?.length ? 'ok' : 'empty');
+      renderIapSummary();
+    });
+    if (result.partial) connectionError = '인앱결제 서버와의 연결이 끊겼습니다. 실패 국가를 다시 조회해 주세요.';
+  } catch (error) {
+    connectionError = error.message;
   }
 
-  const separators = numeric.match(/[.,]/g) || [];
-  if (separators.length === 0) {
-    const parsed = Number(numeric);
-    return Number.isFinite(parsed) ? parsed * compactMultiplier : null;
+  if (token !== currentSearchToken || signal.aborted) return;
+  for (const code of expected) {
+    if (received.has(code)) continue;
+    delete iapsByCountry[code];
+    iapStatuses[code] = 'request-failed';
   }
-
-  const lastSeparatorIndex = Math.max(numeric.lastIndexOf('.'), numeric.lastIndexOf(','));
-  const decimalPart = numeric.slice(lastSeparatorIndex + 1);
-  const separator = numeric[lastSeparatorIndex];
-  const groups = numeric.split(separator);
-  const canBeDecimal = decimalPart.length > 0 && decimalPart.length <= fractionDigits;
-  const isThreeDigitDecimal = fractionDigits === 3 && decimalPart.length === 3 && groups.length === 2 && groups[0].length <= 3;
-
-  if (canBeDecimal || isThreeDigitDecimal) {
-    const whole = numeric.slice(0, lastSeparatorIndex).replace(/[.,]/g, '');
-    const parsed = Number(`${whole}.${decimalPart}`);
-    return Number.isFinite(parsed) ? parsed * compactMultiplier : null;
-  }
-
-  const parsed = Number(numeric.replace(/[.,]/g, ''));
-  return Number.isFinite(parsed) ? parsed * compactMultiplier : null;
+  renderIapSummary(true);
+  if (connectionError) setIapStatus(connectionError, true);
 }
 
-function parseIapMinMaxClient(iapRangeStr, currency) {
-  if (!iapRangeStr) return null;
-  const str = String(iapRangeStr).trim();
-  const matches = str.match(/[\d][\d\s.,'’]*/g);
-  if (!matches || matches.length === 0) return null;
-
-  const cleanNums = matches
-    .map((match) => parseLocalizedPriceClient(match, currency))
-    .filter((amount) => Number.isFinite(amount) && amount > 0);
-
-  if (cleanNums.length === 0) return null;
-  if (cleanNums.length === 1) return { min: cleanNums[0], max: cleanNums[0] };
-  return { min: Math.min(...cleanNums), max: Math.max(...cleanNums) };
-}
-
-// Mirror of server.buildGooglePlayIaps: the public page only exposes one
-// "per item" range, so emit separate min/max tracks that the IAP diff,
-// filters, and sorting can operate on again.
-function buildGooglePlayIapsClient(iapRange, minMax, currency) {
-  if (!minMax) return [];
-
-  const parts = String(iapRange || '')
-    .split(/\s*[-\u2013\u2014]\s*/)
-    .map((p) => p.replace(/\s*(?:per item|per unit|항목당|pro Artikel|par article|por item|por artículo)\s*$/i, '').trim())
-    .filter(Boolean);
-  const minStr = parts[0] || `${currency} ${minMax.min}`;
-  const maxStr = parts.length > 1 ? parts[parts.length - 1] : minStr;
-
-  if (minMax.min === minMax.max || parts.length <= 1) {
-    return [{
-      trackKey: 'google_play_min',
-      trackName: '인앱결제 최저가',
-      price: minMax.min,
-      currency,
-      formattedPrice: minStr
-    }];
-  }
-
-  return [
-    {
-      trackKey: 'google_play_min',
-      trackName: '인앱결제 최저가',
-      price: minMax.min,
-      currency,
-      formattedPrice: minStr
-    },
-    {
-      trackKey: 'google_play_max',
-      trackName: '인앱결제 최고가',
-      price: minMax.max,
-      currency,
-      formattedPrice: maxStr
-    }
-  ];
-}
-
-// ─── IAP Table Rendering ──────────────────────────────────────────────────────
 function renderIapTable() {
   const tbody = $('iap-tbody');
   if (!tbody) return;
@@ -1287,9 +1009,10 @@ function createResilientSSE(url, { maxRetries = 2, retryDelay = 2000 } = {}) {
   };
   function connect() {
     if (closed) return;
-    es = new EventSource(url);
-    es.onmessage = event => {
-      if (closed) return;
+    const connection = new EventSource(url);
+    es = connection;
+    connection.onmessage = event => {
+      if (closed || es !== connection) return;
       let data;
       try { data = JSON.parse(event.data); } catch { return; }
       if (data.type === 'done') {
@@ -1297,12 +1020,13 @@ function createResilientSSE(url, { maxRetries = 2, retryDelay = 2000 } = {}) {
         listeners.ondone?.(data);
       } else if (data.type === 'error') {
         close();
-        listeners.onmessage?.(event);
-      } else listeners.onmessage?.(event);
+        listeners.onmessage?.(data);
+      } else listeners.onmessage?.(data);
     };
-    es.onerror = () => {
-      es.close();
-      if (closed) return;
+    connection.onerror = () => {
+      if (closed || es !== connection) return;
+      connection.close();
+      es = null;
       if (attempts++ < maxRetries) {
         listeners.onreconnect?.(attempts);
         timer = setTimeout(connect, retryDelay);
@@ -1351,7 +1075,9 @@ function acceptPriceRow(row, token) {
   upsertCountry(priceData, row);
   if (currentStore === 'google') {
     iapsByCountry[row.country] = row.iaps || [];
-    iapStatuses[row.country] = row.fetchStatus === 'request-failed' ? 'request-failed' : (row.iaps?.length ? 'ok' : 'empty');
+    iapStatuses[row.country] = row.available === false
+      ? row.fetchStatus === 'request-failed' ? 'request-failed' : 'unavailable'
+      : row.iaps?.length ? 'ok' : 'empty';
   }
   updateScanProgress();
   hide('loading-section');
@@ -1359,26 +1085,25 @@ function acceptPriceRow(row, token) {
   updateStats();
   renderTable();
   if (selectedIapTrackName) renderIapTable();
+  if (compareFinished) renderCompareTable();
 }
 
 function collectPriceStream(url, signal, onRow, onNotice = () => {}) {
   return new Promise((resolve, reject) => {
     if (signal.aborted) return resolve({ cancelled: true });
     const stream = createResilientSSE(url);
+    const request = requestSignal(signal, 180000);
     let settled = false;
     const finish = (error, data) => {
       if (settled) return;
       settled = true;
-      clearTimeout(deadline);
-      signal.removeEventListener('abort', abort);
+      request.removeEventListener('abort', abort);
       stream.close();
       if (error) reject(error); else resolve(data);
     };
-    const abort = () => finish(null, { cancelled: true });
-    const deadline = setTimeout(() => finish(null, { partial: true }), 180000);
-    signal.addEventListener('abort', abort, { once: true });
-    stream.onmessage(event => {
-      const data = JSON.parse(event.data);
+    const abort = () => finish(null, signal.aborted ? { cancelled: true } : { partial: true });
+    request.addEventListener('abort', abort, { once: true });
+    stream.onmessage(data => {
       if (data.type === 'error') finish(new Error(data.message || '조회 실패'));
       else if (data.type === 'notice') onNotice(data.message);
       else if (data.country) onRow(data);
@@ -1386,7 +1111,8 @@ function collectPriceStream(url, signal, onRow, onNotice = () => {}) {
     stream.ondone(data => finish(null, data));
     stream.onerror(() => finish(null, { partial: true }));
     stream.onreconnect(() => onNotice('연결이 끊겨 다시 연결하는 중입니다.'));
-    stream.start();
+    try { stream.start(); }
+    catch (error) { finish(error); }
   });
 }
 
@@ -1406,15 +1132,14 @@ async function searchApp(target) {
   compareController?.abort();
   compareRequestToken++;
   resetComparison();
-  closeActiveStreams();
   searchController = new AbortController();
   const signal = searchController.signal;
   currentAppId = appId;
   currentStore = store;
   currentHintCountry = target.hintCountry || null;
-  const codes = isStaticHosting() && store === 'google' ? GOOGLE_CLIENT_COUNTRY_CODES : APP_STORE_COUNTRIES.map(c => c.code);
+  const codes = isStaticHosting() && store === 'google' ? PAGES_GOOGLE_COUNTRY_CODES : APP_STORE_COUNTRIES.map(c => c.code);
   scanCountryCodes = codes;
-  const requested = retry ? target.retryCountries.filter(c => codes.includes(c)) : codes;
+  const requested = retry ? codes.filter(code => target.retryCountries.includes(code)) : codes;
   scanFinished = false;
   if (!retry) {
     priceData = [];
@@ -1430,13 +1155,13 @@ async function searchApp(target) {
     $('app-developer').textContent = '';
     $('app-icon').removeAttribute('src');
     hide('results-section');
-    document.querySelectorAll('.region-tab').forEach(t => t.classList.toggle('active', t.dataset.region === 'all'));
+    document.querySelectorAll('#region-tabs .region-tab').forEach(t => t.classList.toggle('active', t.dataset.region === 'all'));
     document.querySelectorAll('.tier-chip').forEach(t => t.classList.toggle('active', t.dataset.tier === 'all'));
   }
   configureStorePresentation(store);
   updateStoreBadge(store);
   hide('error-section');
-  hide('iap-section');
+  if (!retry) hide('iap-section');
   show('loading-section');
   $('search-btn').disabled = true;
   $('search-btn').querySelector('.btn-label').textContent = '조회 중…';
@@ -1449,26 +1174,33 @@ async function searchApp(target) {
     await fetchExchangeRates(Boolean(target.forceRefresh), signal);
     if (signal.aborted) return [];
     if (store === 'apple') {
-      const iapRetry = retry ? codes.filter(code => requested.includes(code) || !iapStatuses[code] || iapStatuses[code] === 'request-failed') : null;
+      const iapCountries = isStaticHosting() ? PAGES_APPLE_IAP_COUNTRY_CODES : codes;
+      const iapRetry = retry ? iapCountries.filter(code => requested.includes(code) || !iapStatuses[code] || iapStatuses[code] === 'request-failed') : null;
       loadIapData(appId, Boolean(target.forceRefresh), token, signal, iapRetry);
     }
-    if (isStaticHosting()) {
-      if (store === 'google') await searchGooglePlayClientSide(appId, token, signal, requested);
-      else await searchAppClientSide(appId, currentHintCountry, token, signal, requested);
-    } else {
-      const params = new URLSearchParams();
-      if (target.forceRefresh || retry) params.set('refresh', '1');
-      if (currentHintCountry) params.set('hintCountry', currentHintCountry);
-      if (retry) params.set('countries', requested.join(','));
-      const route = store === 'google' ? 'google-prices-stream' : 'prices-stream';
-      await collectPriceStream(`/api/${route}/${appId}?${params}`, signal,
-        row => acceptPriceRow(row, token), message => {
+    const received = new Set();
+    let connectionError = '';
+    try {
+      const result = requested.length && await collectAppPrices(appId, store, requested, currentHintCountry,
+        Boolean(target.forceRefresh || retry), signal, row => {
+          if (!requested.includes(row.country)) return;
+          received.add(row.country);
+          acceptPriceRow(row, token);
+        }, message => {
           if (token === currentSearchToken && $('scan-notice')) $('scan-notice').textContent = message;
         });
+      if (result?.partial) connectionError = '가격 조회 서버와의 연결이 끊겼습니다. 실패 국가를 다시 조회해 주세요.';
+    } catch (error) {
+      connectionError = error.message;
     }
     if (signal.aborted || token !== currentSearchToken) return [];
     for (const code of requested) {
-      if (!priceData.some(row => row.country === code)) acceptPriceRow(unavailableRow(APP_STORE_COUNTRIES.find(c => c.code === code)), token);
+      if (!received.has(code)) acceptPriceRow(unavailableRow(APP_STORE_COUNTRIES.find(c => c.code === code)), token);
+    }
+    if (store === 'google') renderIapSummary(true);
+    if (connectionError) {
+      if ($('scan-notice')) $('scan-notice').textContent = connectionError;
+      if (!priceData.some(row => row.available !== false)) throw new Error(connectionError);
     }
     if (!priceData.some(row => row.available !== false)) {
       const failed = priceData.some(row => row.fetchStatus === 'request-failed');
@@ -1478,7 +1210,6 @@ async function searchApp(target) {
       error.title = failed ? '가격 조회에 실패했습니다' : '앱을 찾을 수 없습니다';
       throw error;
     }
-    if (store === 'google') renderIapSummary(true);
     recordCurrentPriceHistory(appId, store);
     return priceData;
   } catch (error) {
@@ -1505,97 +1236,17 @@ async function searchApp(target) {
   }
 }
 
-// ─── Client-side Google Play Scanner (GitHub Pages Mode) ─────────────────────
-const GOOGLE_CLIENT_COUNTRY_CODES = [
+// Countries covered by the public Pages scans.
+const PAGES_APPLE_IAP_COUNTRY_CODES = ['us', 'kr', 'jp', 'gb', 'de', 'fr', 'ca', 'au', 'hu', 'pk', 'es', 'it', 'pl', 'cz', 'cn', 'tw', 'br', 'in'];
+const PAGES_GOOGLE_COUNTRY_CODES = [
   'us', 'ca', 'mx', 'br', 'gb', 'de', 'fr', 'es', 'it', 'nl', 'pl', 'se',
   'jp', 'kr', 'tw', 'hk', 'sg', 'in', 'th', 'id', 'ph', 'vn', 'au', 'nz',
   'ae', 'sa', 'za', 'ng', 'eg', 'tr'
 ];
 
-function parseGooglePlayPageClient(html, country) {
-  const priceMeta = html.match(/<meta itemprop="price" content="([^"]+)"/);
-  const titleMatch = html.match(/<h1[^>]*><span[^>]*>(.*?)<\/span>/);
-  const devMatch = html.match(/\/store\/apps\/(?:developer|dev)\?id=[^"]*"><span>(.*?)<\/span>/);
-  const iconMatch = html.match(/src="(https:\/\/play-lh\.googleusercontent\.com\/[^"]+)"/);
-  const priceCurrencyMatch = html.match(/"priceCurrency":"([A-Z]{3})"/);
-  const currency = priceCurrencyMatch ? priceCurrencyMatch[1] : (COUNTRY_CURRENCIES[country.code] || 'USD');
-  const priceStr = priceMeta ? priceMeta[1] : null;
-
-  // Same availability heuristic as the server: countries without a real
-  // storefront return a stripped USD fallback page with no price meta.
-  const hasPerItemOffers = /per item|per unit|항목당|pro Artikel|par article|por item|por artículo/i.test(html);
-  const realStorefront = priceMeta !== null && (currency !== 'USD' || country.code === 'us' || hasPerItemOffers);
-
-  if (!titleMatch || !realStorefront) {
-    return {
-      country: country.code,
-      countryName: country.name,
-      flag: country.flag,
-      region: country.region,
-      available: false,
-      price: null,
-      currency: '',
-      formattedPrice: '',
-      fetchStatus: realStorefront ? 'no-title' : 'no-storefront',
-      iaps: []
-    };
-  }
-
-  // Own per-item range only: skip related-app offer blocks (they carry an
-  // offerId link) before and after the app title.
-  const perItemRe = /"((?:[\$₩€₹£¥R\$Rs\.A-Z0-9\xa0\s.,]+(?:\s*[-\u2013\u2014]\s*[\$₩€₹£¥R\$Rs\.A-Z0-9\xa0\s.,]+)?)\s*(?:per item|per unit|항목당|pro Artikel|par article|por item|por artículo))"/gi;
-  let iapRange = null;
-  const titlePos = html.indexOf(titleMatch[0]);
-  let perItemMatch;
-  while ((perItemMatch = perItemRe.exec(html)) !== null) {
-    if (perItemMatch.index <= titlePos) continue;
-    const before = html.slice(Math.max(0, perItemMatch.index - 350), perItemMatch.index);
-    if (/offerId/i.test(before)) continue;
-    iapRange = perItemMatch[1];
-    break;
-  }
-
-  const price = parseLocalizedPriceClient(priceStr, currency);
-  const minMax = parseIapMinMaxClient(iapRange, currency);
-  const iaps = buildGooglePlayIapsClient(iapRange, minMax, currency);
-
-  return {
-    country: country.code,
-    countryName: country.name,
-    flag: country.flag,
-    region: country.region,
-    available: true,
-    price,
-    currency,
-    formattedPrice: priceStr || (price === 0 ? 'Free' : ''),
-    iapRange: iapRange || null,
-    iaps,
-    appName: titleMatch[1],
-    artworkUrl: iconMatch ? iconMatch[1] : '',
-    developer: devMatch ? devMatch[1] : 'Developer',
-    rating: null,
-    ratingCount: 0,
-    primaryGenreName: 'Google Play',
-    isFree: price === 0,
-    store: 'google'
-  };
-}
-
-async function searchGooglePlayClientSide(packageId, token = currentSearchToken, signal = searchController?.signal, codes = GOOGLE_CLIENT_COUNTRY_CODES) {
-  const countries = APP_STORE_COUNTRIES.filter(c => codes.includes(c.code));
-  await limitedParallel(countries.map(country => async () => {
-    if (signal?.aborted) return;
-    let row;
-    try {
-      const html = await fetchStorefrontHtml(`https://play.google.com/store/apps/details?id=${encodeURIComponent(packageId)}&gl=${country.code}&hl=en`, signal);
-      row = parseGooglePlayPageClient(html, country);
-    } catch { row = unavailableRow(country); }
-    if (!signal?.aborted) acceptPriceRow(row, token);
-  }), 4);
-}
-
 function applePriceRow(app, country) {
   if (!app) return unavailableRow(country, 'unavailable');
+  if (!Number.isFinite(app.price) || app.price < 0 || !app.currency) return unavailableRow(country);
   const storefront = app.trackViewUrl?.match(/apps\.apple\.com\/([a-z]{2})\//i)?.[1]?.toLowerCase();
   if (storefront && storefront !== country.code) return unavailableRow(country, 'unavailable');
   return { country: country.code, countryName: country.name, flag: country.flag, region: country.region,
@@ -1605,14 +1256,28 @@ function applePriceRow(app, country) {
     primaryGenreName: app.primaryGenreName || '', description: (app.description || '').slice(0, 200), isFree: app.price === 0 };
 }
 
-async function searchAppClientSide(appId, hintCountry, token = currentSearchToken, signal = searchController?.signal, codes = APP_STORE_COUNTRIES.map(c => c.code)) {
-  await limitedParallel(APP_STORE_COUNTRIES.filter(c => codes.includes(c.code)).map(country => async () => {
-    if (signal?.aborted) return;
+async function collectApplePricesClientSide(appId, codes, hintCountry, signal, onRow) {
+  const countries = APP_STORE_COUNTRIES.filter(c => codes.includes(c.code))
+    .sort((a, b) => Number(b.code === hintCountry) - Number(a.code === hintCountry));
+  await limitedParallel(countries.map(country => async () => {
+    if (signal.aborted) return;
     let row;
     try { row = applePriceRow(await fetchITunesJSONP(appId, country.code, signal), country); }
     catch { row = unavailableRow(country); }
-    if (!signal?.aborted) acceptPriceRow(row, token);
+    if (!signal.aborted) onRow(row);
   }), 8);
+}
+
+function collectAppPrices(appId, store, codes, hintCountry, forceRefresh, signal, onRow, onNotice) {
+  if (store === 'apple' && isStaticHosting()) {
+    return collectApplePricesClientSide(appId, codes, hintCountry, signal, onRow);
+  }
+  const params = new URLSearchParams();
+  if (codes.length && codes.length !== APP_STORE_COUNTRIES.length) params.set('countries', codes.join(','));
+  if (forceRefresh) params.set('refresh', '1');
+  if (hintCountry) params.set('hintCountry', hintCountry);
+  const route = store === 'google' ? 'google-prices-stream' : 'prices-stream';
+  return collectPriceStream(storefrontApiUrl(`${route}/${appId}`, params), signal, onRow, onNotice);
 }
 
 // ─── Toast Notifications ──────────────────────────────────────────────────────
@@ -2151,16 +1816,20 @@ function renderHistogram() {
 
 // ─── Compare Mode ─────────────────────────────────────────────────────────────
 let comparePriceData = [];
-let compareAppName = '';
+let compareFinished = false;
+let compareConnectionError = '';
 
 function resetComparison() {
   comparePriceData = [];
-  compareAppName = '';
+  compareFinished = false;
+  compareConnectionError = '';
   hide('compare-status');
   hide('compare-section');
   $('compare-search-input').value = '';
   $('compare-tbody').innerHTML = '<tr><td colspan="6" class="table-placeholder">비교할 앱을 입력해 주세요.</td></tr>';
   $('compare-status-text').textContent = '';
+  $('compare-currency-a').textContent = `앱 A (${currentBaseCurrency})`;
+  $('compare-currency-b').textContent = `앱 B (${currentBaseCurrency})`;
   const appALabel = document.querySelector('#compare-table .compare-app-a');
   const appBLabel = document.querySelector('#compare-table .compare-app-b');
   if (appALabel) appALabel.textContent = '앱 A';
@@ -2170,85 +1839,72 @@ function resetComparison() {
 async function runCompareSearch() {
   const parsed = parseAppStoreUrl($('compare-search-input')?.value);
   if (!parsed) { showToast('올바른 URL 또는 앱 ID를 입력해 주세요.'); return; }
+  const codes = scanCountryCodes;
+  if (!codes.length) return;
   compareController?.abort();
   compareController = new AbortController();
   const signal = compareController.signal;
   const token = ++compareRequestToken;
-  const mainToken = currentSearchToken;
   const rows = [];
   comparePriceData = [];
+  compareFinished = false;
+  compareConnectionError = '';
   show('compare-status');
+  $('compare-status').querySelector('.mini-spinner').classList.remove('hidden');
   $('compare-status-text').textContent = '비교할 앱 가격을 수집하는 중…';
-  try {
-    if (isStaticHosting()) rows.push(...await collectCompareDataClientSide(parsed.appId, parsed.store, signal));
-    else {
-      const route = parsed.store === 'google' ? 'google-prices-stream' : 'prices-stream';
-      await collectPriceStream(`/api/${route}/${parsed.appId}`, signal, row => {
-        if (!signal.aborted) upsertCountry(rows, row);
-      });
-    }
-    if (signal.aborted || token !== compareRequestToken || mainToken !== currentSearchToken) return;
-    comparePriceData = rows;
-    renderCompareTable();
-  } catch {
-    if (!signal.aborted) showToast('비교 앱 조회에 실패했습니다. 다시 시도해 주세요.');
-  } finally {
-    if (token === compareRequestToken) hide('compare-status');
-  }
-}
+  $('compare-tbody').innerHTML = '<tr><td colspan="6" class="table-placeholder">비교할 앱 가격을 수집하는 중…</td></tr>';
 
-async function collectCompareDataClientSide(appId, store, signal) {
-  const codes = store === 'google' ? GOOGLE_CLIENT_COUNTRY_CODES : ['us', 'kr', 'jp', 'gb', 'de', 'fr', 'ca', 'au'];
-  const rows = [];
-  await limitedParallel(APP_STORE_COUNTRIES.filter(c => codes.includes(c.code)).map(country => async () => {
-    if (signal?.aborted) return;
-    let row;
-    try {
-      if (store === 'google') {
-        const html = await fetchStorefrontHtml(`https://play.google.com/store/apps/details?id=${appId}&gl=${country.code}&hl=en`, signal);
-        row = parseGooglePlayPageClient(html, country);
-      } else row = applePriceRow(await fetchITunesJSONP(appId, country.code, signal), country);
-    } catch { row = unavailableRow(country); }
-    if (!signal?.aborted) upsertCountry(rows, row);
-  }), 4);
-  return rows;
+  let connectionError = '';
+  try {
+    const result = await collectAppPrices(parsed.appId, parsed.store, codes, parsed.hintCountry, false,
+      signal, row => {
+        if (!signal.aborted && codes.includes(row.country)) upsertCountry(rows, row);
+      }, message => {
+        if (!signal.aborted) $('compare-status-text').textContent = message;
+      });
+    if (result?.partial) connectionError = '비교 앱 가격을 일부만 받았습니다. 다시 비교해 주세요.';
+  } catch (error) {
+    connectionError = error.message;
+  }
+  if (signal.aborted || token !== compareRequestToken) return;
+
+  comparePriceData = rows;
+  compareConnectionError = connectionError;
+  compareFinished = true;
+  $('compare-status').querySelector('.mini-spinner').classList.add('hidden');
+  renderCompareTable();
 }
 
 function renderCompareTable() {
   const tbody = $('compare-tbody');
-  if (!tbody) return;
+  const countries = scanCountryCodes.length ? scanCountryCodes : getUniqueCountries(priceData).map(row => row.country);
+  const byCountryA = new Map(priceData.map(row => [row.country, row]));
+  const byCountryB = new Map(comparePriceData.map(row => [row.country, row]));
+  const currencyLabel = isPppMode ? `PPP ${currentBaseCurrency}` : currentBaseCurrency;
+  $('compare-currency-a').textContent = `앱 A (${currencyLabel})`;
+  $('compare-currency-b').textContent = `앱 B (${currencyLabel})`;
+  const appALabel = document.querySelector('#compare-table thead .compare-app-a');
+  const appBLabel = document.querySelector('#compare-table thead .compare-app-b');
+  if (appALabel) appALabel.textContent = priceData.find(row => row.appName)?.appName || '앱 A';
+  if (appBLabel) appBLabel.textContent = comparePriceData.find(row => row.appName)?.appName || '앱 B';
 
-  if (comparePriceData.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="6" class="table-placeholder">비교할 앱 가격 정보를 불러오지 못했습니다.</td></tr>`;
-    return;
-  }
-
-  const bestCompare = comparePriceData.find(i => i.appName);
-  compareAppName = bestCompare ? bestCompare.appName : '비교 앱';
-
-  const appALabel = document.querySelector('.compare-app-a');
-  const appBLabel = document.querySelector('.compare-app-b');
-  if (appALabel) {
-    const bestA = priceData.find(i => i.appName);
-    appALabel.textContent = bestA ? bestA.appName : '앱 A';
-  }
-  if (appBLabel) {
-    appBLabel.textContent = compareAppName;
-  }
-
-  const uniqueA = getUniqueCountries(priceData);
-  const uniqueB = getUniqueCountries(comparePriceData);
+  const cell = (item, value, role, winner) => {
+    const status = !item ? '미조회' : item.fetchStatus === 'request-failed' ? '조회 실패' : '미판매';
+    const available = item && item.available !== false;
+    const local = available ? fmtLocal(item.price, item.currency, item.formattedPrice)
+      : `<span class="unavailable-label">${status}</span>`;
+    return `<td class="col-local compare-app-${role}${winner === role ? ' compare-winner' : ''}">${local}</td>
+      <td class="col-usd">${available ? fmtBaseVal(value) : '—'}</td>`;
+  };
 
   let aWins = 0, bWins = 0, ties = 0;
-
   const fragment = document.createDocumentFragment();
-  uniqueA.forEach((itemA) => {
-    if (itemA.available === false) return;
-    const itemB = uniqueB.find(i => i.country === itemA.country && i.available !== false);
-
-    const valA = toBaseVal(itemA.price, itemA.currency, itemA.country);
-    const valB = itemB ? toBaseVal(itemB.price, itemB.currency, itemB.country) : null;
-
+  for (const code of countries) {
+    const itemA = byCountryA.get(code);
+    const itemB = byCountryB.get(code);
+    const country = APP_STORE_COUNTRIES.find(c => c.code === code);
+    const valA = itemA && itemA.available !== false ? toBaseVal(itemA.price, itemA.currency, code) : null;
+    const valB = itemB && itemB.available !== false ? toBaseVal(itemB.price, itemB.currency, code) : null;
     let diff = null;
     let winner = '';
     if (Number.isFinite(valA) && Number.isFinite(valB)) {
@@ -2259,61 +1915,32 @@ function renderCompareTable() {
     }
 
     const tr = document.createElement('tr');
-    const dc = diffClass(diff);
-
     tr.innerHTML = `
       <td class="col-country">
-        <span class="flag">${itemA.flag}</span>
-        <span class="country-name">${escHtml(itemA.countryName)}</span>
+        <span class="flag">${country?.flag || ''}</span>
+        <span class="country-name">${escHtml(country?.name || code.toUpperCase())}</span>
       </td>
-      <td class="col-local compare-app-a${winner === 'a' ? ' compare-winner' : ''}">${fmtLocal(itemA.price, itemA.currency, itemA.formattedPrice)}</td>
-      <td class="col-usd">${fmtBaseVal(valA)}</td>
-      <td class="col-local compare-app-b${winner === 'b' ? ' compare-winner' : ''}">${itemB ? fmtLocal(itemB.price, itemB.currency, itemB.formattedPrice) : '<span class="unavailable-label">미지원</span>'}</td>
-      <td class="col-usd">${itemB ? fmtBaseVal(valB) : '—'}</td>
-      <td class="col-diff">
-        ${diff !== null ? `<span class="diff-badge ${dc}">${diffLabel(diff)}</span>` : '—'}
-      </td>
-    `;
+      ${cell(itemA, valA, 'a', winner)}
+      ${cell(itemB, valB, 'b', winner)}
+      <td class="col-diff">${diff !== null ? `<span class="diff-badge ${diffClass(diff)}">${diffLabel(diff)}</span>` : '—'}</td>`;
     fragment.appendChild(tr);
-  });
-
-  tbody.innerHTML = '';
-  tbody.appendChild(fragment);
-
-  const statusText = $('compare-status-text');
-  if (statusText) {
-    statusText.textContent = `비교 완료: ${aWins}개국에서 앱 A 저렴 · ${bWins}개국에서 앱 B 저렴 · ${ties}개국 동일`;
   }
+  tbody.replaceChildren(fragment);
+
+  const counts = `${aWins}개국에서 앱 A 저렴 · ${bWins}개국에서 앱 B 저렴 · ${ties}개국 동일`;
+  $('compare-status-text').textContent = compareConnectionError ? `${compareConnectionError} · ${counts}` : `비교 완료 · ${counts}`;
 }
+
 // ─── Copy Table TSV ────────────────────────────────────────────────────────────
 function copyTableTSV() {
-  const availableItems = getUniqueCountries(priceData)
-    .filter(i => i.available !== false)
-    .map(i => ({
-      ...i,
-      val: toBaseVal(i.price, i.currency, i.country)
-    }));
-
-  if (availableItems.length === 0) {
+  const rows = [...$('price-table').rows].map(row => [...row.cells].map(cell =>
+    cell.textContent.trim().replace(/\s+/g, ' ')));
+  if (rows.length < 2 || rows[1].length === 1) {
     showToast('복사할 데이터가 없습니다.');
     return;
   }
 
-  const usItem = availableItems.find(i => i.country === 'us');
-  const usVal = usItem ? usItem.val : null;
-
-  availableItems.sort((a, b) => (a.val ?? Infinity) - (b.val ?? Infinity));
-
-  let tsv = `순위\t국가\t현지 가격\t${currentBaseCurrency} 환산가\t미국 대비 차이\n`;
-  availableItems.forEach((item, idx) => {
-    const diff = (usVal !== null && usVal > 0 && item.val !== null && item.val > 0)
-      ? (((item.val - usVal) / usVal) * 100).toFixed(1) + '%'
-      : '-';
-    const localFormatted = item.formattedPrice || `${item.currency} ${item.price}`;
-    const baseFormatted = item.val !== null ? fmtBaseVal(item.val) : '-';
-    tsv += `${idx + 1}\t${item.countryName}\t${localFormatted}\t${baseFormatted}\t${diff}\n`;
-  });
-
+  const tsv = rows.map(cells => cells.join('\t')).join('\n') + '\n';
   navigator.clipboard.writeText(tsv).then(() => {
     showToast('📋 클립보드에 테이블 데이터가 복사되었습니다.');
   }).catch(() => {
@@ -2912,6 +2539,8 @@ function closeShortcutsModal() {
 }
 
 // ─── Event Listeners ──────────────────────────────────────────────────────────
+cleanUpLegacyOfflineData(document.currentScript?.src).catch(() => {});
+
 document.addEventListener('DOMContentLoaded', () => {
   initModalKeyboard();
   const searchInput = $('search-input');
@@ -2965,9 +2594,9 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Region tabs
-  document.querySelectorAll('.region-tab').forEach(tab => {
+  document.querySelectorAll('#region-tabs .region-tab').forEach(tab => {
     tab.addEventListener('click', () => {
-      document.querySelectorAll('.region-tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('#region-tabs .region-tab').forEach(t => t.classList.remove('active'));
       tab.classList.add('active');
       currentRegion = tab.dataset.region;
       renderTable();
@@ -2988,7 +2617,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.region-card').forEach(card => {
     card.addEventListener('click', () => {
       const region = card.dataset.region;
-      document.querySelectorAll('.region-tab').forEach(t => {
+      document.querySelectorAll('#region-tabs .region-tab').forEach(t => {
         if (t.dataset.region === region) {
           t.click();
           $('price-table').scrollIntoView({ behavior: 'smooth' });
@@ -3032,6 +2661,7 @@ document.addEventListener('DOMContentLoaded', () => {
       updateStats();
       renderTable();
       renderIapTable();
+      if (compareFinished) renderCompareTable();
     });
   }
 
@@ -3045,6 +2675,7 @@ document.addEventListener('DOMContentLoaded', () => {
       updateStats();
       renderTable();
       renderIapTable();
+      if (compareFinished) renderCompareTable();
     });
   }
 

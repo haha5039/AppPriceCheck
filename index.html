@@ -7,6 +7,7 @@
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <meta name="description" content="100개 이상 국가의 App Store 및 인앱결제 가격을 한눈에 비교하세요.">
   <meta name="theme-color" content="#080b1d">
+  <meta name="appprice-api-base-url" content="">
   <link rel="manifest" href="manifest.json">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -238,7 +239,7 @@
             <div class="stat-body">
               <p class="stat-label">글로벌 평균</p>
               <p id="avg-price" class="stat-value">—</p>
-              <p class="stat-sub">USD 환산 기준</p>
+              <p class="stat-sub" id="avg-price-currency">USD 환산 기준</p>
             </div>
           </div>
           <div class="stat-card">
@@ -334,7 +335,7 @@
             </button>
           </div>
 
-          <div id="compare-status" class="compare-status hidden">
+          <div id="compare-status" class="compare-status hidden" role="status">
             <div class="mini-spinner"></div>
             <span id="compare-status-text">비교 앱 가격을 불러오는 중…</span>
           </div>
@@ -345,9 +346,9 @@
                 <tr>
                   <th class="col-country">국가</th>
                   <th class="col-local compare-app-a">앱 A</th>
-                  <th class="col-usd">앱 A (USD)</th>
+                  <th class="col-usd" id="compare-currency-a">앱 A (USD)</th>
                   <th class="col-local compare-app-b">앱 B</th>
-                  <th class="col-usd">앱 B (USD)</th>
+                  <th class="col-usd" id="compare-currency-b">앱 B (USD)</th>
                   <th class="col-diff">차이</th>
                 </tr>
               </thead>
@@ -669,15 +670,6 @@
     </footer>
 
   </div><!-- #app -->
-  <script src="app.js?v=2.1.1"></script>
-
-  <script>
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.getRegistrations().then(regs => {
-        for (let reg of regs) reg.unregister();
-      });
-      caches.keys().then(keys => keys.forEach(key => caches.delete(key)));
-    }
-  </script>
+  <script src="app.js?v=2.1.2"></script>
 </body>
 </html>

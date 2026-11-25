@@ -46,7 +46,7 @@ function captureTable(c, id) {
     return { appendChild(row) { rows.push(row); } };
   };
   c.context.document.createElement = () => ({ classList: { add() {} }, innerHTML: '' });
-  c.element(id).appendChild = () => {};
+  c.element(id).appendChild = c.element(id).replaceChildren = () => {};
   return () => rows.map(row => row.innerHTML).join('');
 }
 
@@ -71,6 +71,21 @@ test('SSE retries stay bounded even when each connection delivers country data',
   c.streams[1].onerror();
   assert.equal(c.streams.length, 2);
   assert.equal(c.run('failures'), 1);
+});
+
+test('events from an earlier SSE connection cannot close or update the active stream', async () => {
+  const c = client();
+  c.run('var completed = 0, rows = []; var stream = createResilientSSE("/prices", {retryDelay: 0}); stream.onmessage(row => rows.push(row)); stream.ondone(() => completed++); stream.start();');
+  const previous = c.streams[0];
+  previous.onerror();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  previous.send({ country: 'kr' });
+  previous.onerror();
+  assert.equal(c.streams[1].closed, undefined);
+  c.streams[1].send({ country: 'us' });
+  c.streams[1].send({ type: 'done' });
+  assert.equal(c.run('rows.map(row => row.country).join()'), 'us');
+  assert.equal(c.run('completed'), 1);
 });
 
 test('cancelling a stream settles its promise and ignores late data', async () => {
@@ -174,28 +189,51 @@ test('static name search uses JSONP and locale fallback; abort removes callbacks
 test('static Apple lookup distinguishes missing apps from request failures', async () => {
   const c = client();
   c.run('updateStats = renderTable = () => {}; scanCountryCodes = ["us", "kr"]; fetchITunesJSONP = async (id, country) => { if (country === "kr") throw Error("network"); return null; };');
-  await c.run('searchAppClientSide("123456", null, currentSearchToken, new AbortController().signal, ["us","kr"])');
+  await c.run('collectApplePricesClientSide("123456", ["us","kr"], null, new AbortController().signal, row => acceptPriceRow(row, currentSearchToken))');
   assert.equal(c.run('priceData.find(r => r.country === "us").fetchStatus'), 'unavailable');
   assert.equal(c.run('priceData.find(r => r.country === "kr").fetchStatus'), 'request-failed');
 });
 
-test('static IAP failures cannot become empty products or update a newer search', async () => {
+test('Pages IAP uses the configured API, marks missing countries and ignores cancelled responses', async () => {
   const c = client();
-  c.run('renderIapSummary = () => {}; fetchITunesJSONP = async () => { throw Error("network"); };');
-  await c.run('loadIapDataClientSide("123456", currentSearchToken, new AbortController().signal, ["us"])');
-  assert.equal(c.run('iapStatuses.us'), 'request-failed');
-  c.run('iapStatuses = {}; fetchITunesJSONP = async () => { currentSearchToken++; return null; };');
-  await c.run('loadIapDataClientSide("123456", currentSearchToken, new AbortController().signal, ["us"])');
+  c.context.document.querySelector = () => ({ content: 'https://api.example.test' });
+  c.run('renderIapSummary = () => {}; var controller = new AbortController();');
+  const pending = c.run('loadIapData("123456", true, currentSearchToken, controller.signal, ["us","kr"])');
+  const stream = c.streams[0];
+  assert.equal(new URL(stream.url).origin, 'https://api.example.test');
+  assert.equal(new URL(stream.url).searchParams.get('countries'), 'us,kr');
+  assert.equal(new URL(stream.url).searchParams.get('refresh'), '1');
+  stream.send({ country: 'us', type: 'data', fetchStatus: 'empty' });
+  stream.send({ type: 'done' });
+  await pending;
+  assert.equal(c.run('iapStatuses.us'), 'empty');
+  assert.equal(c.run('iapStatuses.kr'), 'request-failed');
+
+  const cancelled = c.run('loadIapData("123456", true, currentSearchToken, controller.signal, ["kr"])');
+  c.run('controller.abort(); currentSearchToken++; iapStatuses = {};');
+  c.streams[1].send({ country: 'kr', type: 'data', fetchStatus: 'empty' });
+  await cancelled;
   assert.equal(c.run('Object.keys(iapStatuses).length'), 0);
+});
+
+test('Pages without an API configuration preserves Apple prices and reports the IAP connection error', async () => {
+  const c = client();
+  c.context.window.location.hostname = 'example.github.io';
+  c.run('renderIapSummary = updateStats = renderTable = () => {}; fetchITunesJSONP = async () => ({price:5,currency:"USD"});');
+  await c.run('searchApp({appId:"123456"})');
+  assert.equal(c.run('priceData.length'), 108);
+  assert.equal(c.run('priceData[0].price'), 5);
+  assert.match(c.element('iap-loading-text').textContent, /서버 주소/);
 });
 
 test('comparison queries cannot mix late rows from previous queries', async () => {
   const c = client();
   c.element('compare-search-input').value = '123456';
-  c.run('renderCompareTable = () => {};');
+  c.run('scanCountryCodes = ["us","it"]; renderCompareTable = () => {};');
   const a = c.run('runCompareSearch()');
   c.element('compare-search-input').value = '654321';
   const b = c.run('runCompareSearch()');
+  assert.equal(new URL(c.streams[1].url, 'http://localhost').searchParams.get('countries'), 'us,it');
   c.streams[0].send({country:'us',price:100});
   c.streams[1].send({country:'us',price:5});
   c.streams[1].send({type:'done'});
@@ -292,11 +330,11 @@ test('new main search clears previous comparison rows, labels and controls', asy
   c.context.document.querySelector = selector => labels[selector] || null;
   c.element('compare-tbody').innerHTML = '<tr><td>Old prices</td></tr>';
   c.element('compare-search-input').value = '654321';
-  c.run('updateStats = renderTable = loadIapData = recordCurrentPriceHistory = () => {}; comparePriceData = [{country:"us", price:99}]; compareAppName = "Old B";');
+  c.run('updateStats = renderTable = loadIapData = recordCurrentPriceHistory = () => {}; comparePriceData = [{country:"us", price:99}]; compareFinished = true;');
   const result = c.run('searchApp({appId:"123456"})');
   await tick();
   assert.equal(c.run('comparePriceData.length'), 0);
-  assert.equal(c.run('compareAppName'), '');
+  assert.equal(c.run('compareFinished'), false);
   assert.equal(c.element('compare-section').classList.contains('hidden'), true);
   assert.doesNotMatch(c.element('compare-tbody').innerHTML, /Old prices/);
   assert.equal(c.element('compare-search-input').value, '');

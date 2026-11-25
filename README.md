@@ -34,7 +34,7 @@
 | Backend | Node.js, Express, Axios |
 | 데이터 API | Apple iTunes Lookup API, iTunes Search API, Google Play Web Scraping |
 | 스트리밍 | Server-Sent Events (SSE), 비동기 병렬 워커 풀 |
-| 배포 | GitHub Pages + GitHub Actions |
+| 배포 | GitHub Pages + GitHub Actions, 가격 수집용 Express HTTPS API |
 
 ## 빠른 시작
 
@@ -52,7 +52,7 @@ node server.js
 npm test
 ```
 
-`node:test` 기반 테스트가 서버/클라이언트 파서 일관성(현지 가격, Google Play IAP 최저/최고 분리, App Store IAP 쌍 추출), 브라우저용 Google Play 페이지 파서(관련 앱 offerId 제외, 가용성 추정, 스토어프런트 부재 감지), 그리고 조회 이력의 정렬·변동 계산을 검증합니다. GitHub Actions 배포 파이프라인에서 `npm test`를 먼저 통과해야 배포됩니다.
+`node:test` 기반 테스트는 현지 가격과 IAP 파서, 국가별 스트림의 오류·캐시 처리, 조회 이력 계산을 검증합니다. GitHub Actions는 배포 전에 Node 20 및 26의 테스트와 Chromium 통합 테스트를 실행합니다.
 
 ## 프로젝트 구조
 
@@ -93,16 +93,26 @@ MIT License
 - 결과 상단에서 실제 조회 국가 수, 성공·미판매/미지원·실패 수를 확인하고 실패 국가만 재조회할 수 있습니다. IAP 조회 실패도 별도로 표시하고 재시도할 수 있습니다.
 - 환율이 없는 금액은 `환산 불가`로 표시하고 통계에서 제외합니다. 확인된 가격이 0인 경우만 무료로 처리합니다.
 - 신규 이력(`schemaVersion: 2`)은 표시 통화와 PPP 적용 여부, 비교 가능한 국가 범위(`coverage`)를 함께 저장합니다. 국가 조회가 실패하거나 환산가를 확인하지 못한 조회는 이력에 기록하지 않습니다. 같은 앱·스토어·통화·PPP 방식·국가 범위끼리 비교하며, 단위 또는 국가 범위가 없는 기존 이력은 보존하되 추이 계산에서 제외합니다.
-- GitHub Pages의 이름 검색은 iTunes JSONP를 사용합니다. 가격 조회 범위는 App Store 108개국, Google Play 주요 국가이며 IAP 공개 페이지는 일부 국가를 조회합니다. 외부 공개 페이지·프록시 응답에 따라 결과가 제한될 수 있습니다.
+- GitHub Pages의 Apple 이름 검색과 앱 가격은 iTunes JSONP를 사용합니다. Google Play 가격과 Apple IAP는 Express API에서 수집합니다. 기본 가격 조회 범위는 App Store 108개국, Google Play 주요 국가입니다. 두 앱을 비교할 때는 첫 번째 앱의 조회 대상 국가를 두 번째 앱에도 적용합니다.
 
 ### API 추가 옵션
 
 가격 및 IAP 스트림의 `countries=us,kr` 옵션으로 지원 국가 일부만 조회할 수 있습니다. `refresh=1`은 해당 요청의 캐시를 우회합니다. 잘못된 검색어 타입, 앱 ID, 국가 코드에는 HTTP 400을 반환합니다.
 
+Apple 가격 스트림의 `hintCountry`는 요청 범위 안에서 해당 국가를 먼저 조회합니다. 앱을 찾지 못한 경우에도 국가별 상태와 완료 이벤트를 제공합니다. Google Play 원본의 404는 해당 국가의 미판매 상태로 기록합니다.
+
 IAP의 국가별 `data` 이벤트는 기존 `country`, `iaps`와 함께 `fetchStatus`(`ok`, `empty`, `unavailable`, `request-failed`)를 제공합니다. 완료 이벤트의 `completed`는 처리 국가 수이며 `failed`는 실패 국가 수입니다.
+
+### GitHub Pages와 가격 API 연결
+
+1. `npm start`로 실행하는 Express 서비스에 공개 HTTPS 주소를 연결합니다. 리버스 프록시가 있다면 SSE 응답 버퍼링을 끄고 이벤트가 도착하는 즉시 브라우저에 전달하는지 확인합니다. Pages에 커스텀 도메인을 사용하면 서버 환경 변수 `PAGES_ORIGIN`에 해당 출처를 지정합니다. 기본 출처는 `https://haha5039.github.io`입니다.
+2. GitHub 저장소의 Actions 변수 `PAGES_API_BASE_URL`에 공개 API 출처(예시 `https://prices.example.com`)를 지정합니다. 배포 워크플로가 값을 검사하고 공개 HTML에 주입합니다. 설정값이 없으면 Apple 앱 가격과 이름 검색을 지원하는 정적 사이트를 배포합니다. 유효하지 않은 HTTPS 출처를 지정하면 업로드 전에 배포가 중단됩니다.
+3. API 가동 후 Pages를 배포하고 Google Play 앱 가격과 Apple 인앱결제를 각각 조회합니다. 첫 국가 가격이 전체 완료 전에 표시되고, 새 검색으로 이전 스트림을 취소할 수 있는지 확인합니다.
 
 ### 검증과 정적 자산
 
 `npm test`는 파서, 가격·이력 계산, 검색 완료·취소·재연결·교차 실행, 정적 조회, 실제 HTTP 라우트의 입력 검증·실패 캐시·연결 취소를 외부 응답 모의 테스트로 검증합니다. 테스트는 강제 종료 옵션 없이 종료됩니다.
 
-`npm run check:assets`는 루트와 `public/`의 대응 자산 일치 여부를 검사하며 `npm test` 및 CI에 포함됩니다. 프런트엔드와 서버 자산을 수정한 경우 대응 파일도 동기화해야 합니다. 로컬 개발은 `npm run dev`로 Node의 파일 변경 감지를 사용할 수 있습니다.
+`npm run check:assets`는 루트와 `public/`의 프런트엔드 자산이 일치하는지, `public/`에 배포 대상 파일만 있는지 검사합니다. 프런트엔드 수정 후 대응 파일을 동기화합니다. 로컬 개발은 `npm run dev`로 실행합니다.
+
+`npx playwright install chromium` 후 `npm run test:browser`로 Chromium 통합 테스트를 실행합니다. 테스트는 OpenSSL로 임시 인증서를 만들고, 서로 다른 로컬 출처에서 Pages와 HTTPS API를 모의 운영합니다.

@@ -17,18 +17,27 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [20, 26]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: ${{ matrix.node }}
           cache: npm
       - name: Install dependencies
         run: npm ci
       - name: Run tests and verify static asset parity
         run: npm test
+      - name: Install Chromium
+        if: matrix.node == 20
+        run: npx playwright install --with-deps chromium
+      - name: Run browser integration test
+        if: matrix.node == 20
+        run: npm run test:browser
 
   deploy:
     needs: test
@@ -41,10 +50,15 @@ jobs:
         uses: actions/checkout@v4
       - name: Setup Pages
         uses: actions/configure-pages@v5
+      - name: Configure Pages API
+        if: vars.PAGES_API_BASE_URL != ''
+        env:
+          PAGES_API_BASE_URL: ${{ vars.PAGES_API_BASE_URL }}
+        run: node scripts/configure-pages-api.cjs
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: '.'
+          path: public
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4

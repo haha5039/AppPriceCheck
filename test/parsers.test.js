@@ -1,7 +1,5 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
-const fs = require('node:fs');
-const path = require('node:path');
 
 const {
   parseLocalizedPrice,
@@ -9,44 +7,6 @@ const {
   buildGooglePlayIaps,
   extractIapPairs
 } = require('../server.js');
-
-// ─── Client parity helpers ──────────────────────────────────────────────────
-// The GitHub Pages build (public/app.js) parses pages in the browser, so the
-// client functions must stay behaviorally identical to the server versions.
-const appJs = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
-
-function extractFunction(source, name) {
-  const start = source.indexOf(`function ${name}`);
-  assert.notStrictEqual(start, -1, `function ${name} not found in app.js`);
-  let depth = 0;
-  let i = source.indexOf('{', start);
-  for (; i < source.length; i += 1) {
-    if (source[i] === '{') depth += 1;
-    else if (source[i] === '}') {
-      depth -= 1;
-      if (depth === 0) break;
-    }
-  }
-  return source.slice(start, i + 1);
-}
-
-const CLIENT_FNS = [
-  'decodeHtmlClient',
-  'parseLocalizedPriceClient',
-  'parseIapMinMaxClient',
-  'buildGooglePlayIapsClient',
-  'extractIapPairsClient'
-].map((name) => extractFunction(appJs, name)).join('\n');
-
-const client = new Function(
-  `${CLIENT_FNS}
-  return {
-    parseLocalizedPrice: parseLocalizedPriceClient,
-    parseIapMinMax: parseIapMinMaxClient,
-    buildGooglePlayIaps: buildGooglePlayIapsClient,
-    extractIapPairs: extractIapPairsClient
-  };`
-)();
 
 // ─── parseLocalizedPrice ─────────────────────────────────────────────────────
 test('parseLocalizedPrice handles major currency formats', () => {
@@ -76,19 +36,6 @@ test('parseLocalizedPrice handles major currency formats', () => {
 test('parseLocalizedPrice handles compact Indonesian formats', () => {
   assert.strictEqual(parseLocalizedPrice('Rp 15 ribu', 'IDR'), 15000);
   assert.strictEqual(parseLocalizedPrice('Rp 1,5 juta', 'IDR'), 1500000);
-});
-
-test('client parseLocalizedPrice matches server', () => {
-  const cases = [
-    ['$9.99', 'USD'],
-    ['₩9,900', 'KRW'],
-    ['1,99 €', 'EUR'],
-    ['Rp 75.000', 'IDR'],
-    ['Rs 49,900', 'PKR']
-  ];
-  for (const [input, currency] of cases) {
-    assert.strictEqual(client.parseLocalizedPrice(input, currency), parseLocalizedPrice(input, currency));
-  }
 });
 
 // ─── parseIapMinMax ──────────────────────────────────────────────────────────
@@ -129,22 +76,6 @@ test('buildGooglePlayIaps emits one track for a single value', () => {
   assert.deepStrictEqual(buildGooglePlayIaps('$8.00 - $200.00 per item', null, 'USD'), []);
 });
 
-test('client buildGooglePlayIaps matches server', () => {
-  const cases = [
-    ['$8.00 - $200.00 per item', { min: 8, max: 200 }, 'USD'],
-    ['₩999 - ₩74,000 항목당', { min: 999, max: 74000 }, 'KRW'],
-    ['1,99 € – 14,99 € pro Artikel', { min: 1.99, max: 14.99 }, 'EUR'],
-    ['$6.99 per item', { min: 6.99, max: 6.99 }, 'USD'],
-    ['$8.00 - $200.00 per item', null, 'USD']
-  ];
-  for (const [range, minMax, currency] of cases) {
-    assert.deepStrictEqual(
-      client.buildGooglePlayIaps(range, minMax, currency),
-      buildGooglePlayIaps(range, minMax, currency)
-    );
-  }
-});
-
 // ─── extractIapPairs (App Store) ─────────────────────────────────────────────
 test('extractIapPairs reads textPairs JSON first', () => {
   const html = '<script>{"textPairs":[["Plus","$9.99"],["Pro","$19.99"]]}</script>'
@@ -161,14 +92,4 @@ test('extractIapPairs falls back to text-pair divs', () => {
 test('extractIapPairs falls back to items_V3 JSON', () => {
   const html = '"leadingText":"Yearly","trailingText":"$49.99"';
   assert.deepStrictEqual(extractIapPairs(html), [['Yearly', '$49.99']]);
-});
-
-test('client extractIapPairs matches server', () => {
-  const html = '<script>{"textPairs":[["Plus","$9.99"]]}</script>'
-    + '<div class="text-pair"><span>Monthly</span><span>$4.99</span></div>';
-  assert.deepStrictEqual(client.extractIapPairs(html), extractIapPairs(html));
-});
-
-test('client parseIapMinMax matches server', () => {
-  assert.deepStrictEqual(client.parseIapMinMax('₩999 - ₩74,000 per item', 'KRW'), parseIapMinMax('₩999 - ₩74,000 per item', 'KRW'));
 });
